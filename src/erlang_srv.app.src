@@ -1,0 +1,21 @@
+{application, erlang_srv,
+ [
+  {description, "The Erlang Language Server"},
+  {vsn, git},
+  {registered, []},
+  {mod, {erlang_srv_app, []}},
+  {applications, [kernel,
+                  stdlib,
+                  inets,
+                  getopt,
+                  ranch,
+                  jsx,
+                  yamerl,
+                  elvis_core,
+                  recon]},
+  {env, []},
+  {modules, []},
+  {maintainers, []},
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.

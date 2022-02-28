@@ -1,0 +1,118 @@
+# List of OTP applications to to exclude from analysis
+otpAppsExclude:
+  - megaco
+  - diameter
+  - snmp
+  - wx
+
+# Subdirectories to recursively analyze.
+# Used both for project and dependency applications.
+# It supports wildcards.
+appsDirs:
+  - src
+  - test
+  - include
+
+# List of directories containing dependencies.
+# It supports wildcards.
+depsDirs:
+  - _checkout
+  - _build/default/lib
+
+# List of directories used by diagnostic modules as include dirs.
+# It supports wildcards.
+includeDirs:
+  - include
+
+# List of directories to add into erlang code server by code:add_path/1
+extraPaths:
+  - /usr/local/lib/extra_erlang_modules/
+  - /home/user/extra_erlang_modules/
+
+# Erlang distribution mode.
+# Either "shortnames" or "longnames"
+distrMode: shortnames
+
+# Predefined macros used during analysis.
+macros:
+  - name: MACRO_INTEGER
+    value: 1
+  - name: MACRO_BOOLEAN
+    value: false
+  - name: MACRO_GENERAL
+    value: "[1, 1.45, true, \"string\", {}]"
+
+# Whether or not to fetch automatically OTP man pages
+syncOtpMan: true
+
+# List of diagnostic modules with their options
+diagnostics:
+
+  # Reports warnings and errors from erlang compiler
+  - name: compiler
+    enabled: true
+    options:
+      extraOptions: "[nowarn_unused_vars, {d, 'DEBUG'}]"
+      deployNode: node@hostname
+      deployCookie: SECRET
+
+  # Looks for undefined external function calls and undefined external type usage
+  - name: xref
+    enabled: true
+    options:
+      toSkip:
+
+        # Disabling whole module diagnostic
+        - module: some_unavailable_module
+
+        # Disabling some functions diagnostic
+        - module: lager
+          functions:
+            - debug/2
+            - info
+            - notice/2
+            - warning
+            - error/2
+            - critical
+            - alert/2
+            - emergency
+
+        # Disabling some functions and types diagnostic
+        - module: hackney
+          functions:
+            - get/4
+            - post
+            - put/4
+            - delete
+          types:
+            - request/0
+            - response
+
+  # Runs elvis to review the code style
+  - name: elvis
+    enabled: true
+    options:
+      config: /home/user/elvis.config
+
+  # Looks for macros which are defined but not utilized
+  - name: unused_macros
+    enabled: true
+    options:
+      to_skip:
+
+        # Disabling whole module diagnostic
+        - module: some_module_one
+
+        # Disabling some macros diagnostic
+        - module: some_module_two
+          macros:
+            - MACRO_1
+            - MACRO_2
+
+  # Runs dialyzer static analysis tool to find discrepancies in your code
+  - name: dialyzer
+    enabled: false
+    options:
+      plts:
+        - /home/user/otp_modules.plt
+        - /home/user/extra_modules.plt
