@@ -7,29 +7,17 @@
 -include("records.hrl").
 -include("log.hrl").
 
--callback process(#request{}) -> {response, #response{}} | {async, pid()}.
+-callback process(request()) -> {response, response()} | {async, pid()}.
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec dispatch(Request :: #request{}) -> {response, #response{}} | {async, pid()}.
+-spec dispatch(Request :: request()) -> {response, response()} | {async, pid()}.
 dispatch(#request{method = <<"initialize">>} = Request) ->
     esrv_req_initialize:process(Request);
 dispatch(#request{id = Id, method = Method} = Request) ->
     try
-        {Time, Result} =
-            timer:tc(fun() ->
-                             case esrv_index_mgr:is_active() of
-                                 true ->
-                                     do_dispatch(#request{id = Id, method = Method} = Request);
-                                 false ->
-                                     MethodNotFoundError =
-                                         #response_error{code = ?REC_INTERNAL_ERROR,
-                                                         message = <<"Not indexed yet">>},
-                                     {response, #response{id = Id, error = MethodNotFoundError}}
-                             end
-
-                     end),
+        {Time, Result} = timer:tc(fun() -> do_dispatch(Request) end),
         ?LOG_INFO("Request '~s' processed in ~p ms", [Method, Time div 1000]),
         Result
     catch
@@ -42,7 +30,7 @@ dispatch(#request{id = Id, method = Method} = Request) ->
             {response, #response{id = Id, error = InternalError}}
     end.
 
--spec do_dispatch(Request :: #request{}) -> {response, #response{}} | {async, pid()}.
+-spec do_dispatch(Request :: request()) -> {response, response()} | {async, pid()}.
 do_dispatch(#request{id = Id, method = Method} = Request) ->
     case Method of
         <<"textDocument/completion">> ->

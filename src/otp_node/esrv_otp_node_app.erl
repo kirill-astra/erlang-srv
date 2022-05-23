@@ -1,4 +1,4 @@
--module(erlang_srv_app).
+-module(esrv_otp_node_app).
 
 -behaviour(application).
 
@@ -21,7 +21,7 @@
 %%--------------------------------------------------------------------
 -spec start(StartType :: application:start_type(), StartArgs :: [any()]) -> {ok, pid()}.
 start(_, _) ->
-    erlang_srv_sup:start_link().
+    esrv_otp_node_sup:start_link().
 
 %%--------------------------------------------------------------------
 %% @private

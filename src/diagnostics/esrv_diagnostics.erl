@@ -6,8 +6,7 @@
 -callback init(Options :: map()) -> NewOptions :: map().
 
 -callback run(TargetUri :: uri(),
-              AppPath :: path(),
-              ModuleType :: module_type(),
+              AppId :: app_id() | undefined,
               Options :: map()) -> [diagnostic()].
 
 -optional_callbacks([init/1]).

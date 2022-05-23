@@ -4,7 +4,7 @@
 
 %% API
 -export([init/1,
-         run/4]).
+         run/3]).
 
 -include("types.hrl").
 -include("records.hrl").
@@ -22,14 +22,24 @@ init(Options) ->
     {ok, _} = esrv_dynamic_sup:start_child(ChildSpec),
     Options.
 
--spec run(Uri :: uri(), AppPath :: path(), ModuleType :: module_type(), Options :: map()) ->
-          [diagnostic()].
-run(Uri, ProjPath, proj, Options) ->
-    case find_config(ProjPath, Options) of
+-spec run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+run(_, undefined, _) ->
+    [];
+run(Uri, AppId, Options) ->
+    case esrv_lib:get_app_type_and_path(AppId) of
+        {ok, AppType, AppPath} when AppType =:= proj orelse AppType =:= sub_proj ->
+            do_run(Uri, AppPath, Options);
+        _ ->
+            []
+    end.
+
+-spec do_run(Uri :: uri(), AppPath :: path(), Options :: map()) -> [diagnostic()].
+do_run(Uri, AppPath, Options) ->
+    case find_config(AppPath, Options) of
         {ok, Hash, ConfigPath} ->
             case esrv_elvis_mgr:ensure_config(Hash, ConfigPath) of
                 {ok, Config} ->
-                    Problems = analyse(Uri, ProjPath, Config),
+                    Problems = analyse(Uri, AppPath, Config),
                     diagnostics(Problems);
                 {error, Error} ->
                     [#diagnostic{position = {line, 1},
@@ -39,9 +49,7 @@ run(Uri, ProjPath, proj, Options) ->
             end;
         undefined ->
             []
-    end;
-run(_, _, _, _) ->
-    [].
+    end.
 
 -spec find_config(AppPath :: path(), Options :: map()) -> {ok, hash(), path()} | undefined.
 find_config(AppPath, Options) ->
@@ -49,20 +57,20 @@ find_config(AppPath, Options) ->
     DefaultConfig = filename:join(esrv_lib:bdir_user_config(), "elvis.config"),
     case maps:find(<<"config">>, Options) of
         {ok, ElvisConfig} ->
-            find_config2([AppConfig, ElvisConfig, DefaultConfig]);
+            do_find_config([AppConfig, ElvisConfig, DefaultConfig]);
         error ->
-            find_config2([AppConfig, DefaultConfig])
+            do_find_config([AppConfig, DefaultConfig])
     end.
 
--spec find_config2(Candidates :: [path()]) -> {ok, hash(), path()} | undefined.
-find_config2([]) ->
+-spec do_find_config(Candidates :: [path()]) -> {ok, hash(), path()} | undefined.
+do_find_config([]) ->
     undefined;
-find_config2([Candidate | T]) ->
+do_find_config([Candidate | T]) ->
     case file:read_file(Candidate) of
         {ok, Content} ->
             {ok, esrv_lib:hash(Content), Candidate};
         {error, _} ->
-            find_config2(T)
+            do_find_config(T)
     end.
 
 -spec analyse(Uri :: uri(), AppPath :: path(), Config :: elvis_config:configs()) -> [problem()].

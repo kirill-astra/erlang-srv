@@ -1,6 +1,26 @@
 # Erlang SRV
 The Erlang Language Server Protocol Implementation.
 
+## Requirements
+- Erlang/OTP 21 or higher installed
+
+## Supported requests
+- textDocument/completion
+- completionItem/resolve
+- textDocument/definition
+- textDocument/references
+- textDocument/hover
+- textDocument/documentSymbol
+- textDocument/documentHighlight
+- textDocument/implementation
+- textDocument/prepareRename
+- textDocument/rename
+- textDocument/foldingRange
+- workspace/symbol
+
+## Limitations
+- Multi workspace mode is not supported
+
 ## Command-line Arguments
 
 These are the command-line arguments that can be provided to the
@@ -57,15 +77,40 @@ Consult example [initializationOptions.json](examples/initializationOptions.json
 
 | Parameter | Description | Default |
 | :- | :- | :- |
-| `otpAppsExclude` | List of OTP applications to to exclude from analysis. | |
-| `appsDirs` | Subdirectories to recursively analyze. Used both for project and dependency applications. It supports wildcards. | `["src", "test", "include"]` |
-| `depsDirs` | List of directories containing dependencies. It supports wildcards. | `["deps", "_checkouts", "_build/default/lib"]` |
-| `includeDirs` | List of directories used by diagnostic modules as include dirs. It supports wildcards. | `["include"]` |
+| `subProjDirs` | List of directories containing sub projects. | `["_checkouts"]` |
+| `subProjs` | List of sub projects. | |
+| `depDirs` | List of directories containing dependencies. | `["deps", "_build/default/lib"]` |
+| `deps` | List of dependencies. | |
+| `appsIgnore` | List of applications to exclude from analysis. | |
+| `appsDirs` | Subdirectories to recursively analyze. Used both for project and sub-project applications. | `["src", "test", "include"]` |
+| `includeDirs` | List of directories used by diagnostic modules as include dirs. It supports wildcards. | `["include", "src/hrl"]` |
 | `extraPaths` | List of directories to add into erlang code server by `code:add_path/1` | |
 | `distrMode` | Erlang distribution mode. Either `"shortnames"` or `"longnames"` | `"shortnames"` |
 | `macros` | Predefined macros used during analysis. | |
 | `syncOtpMan` | Whether or not to fetch automatically [OTP man pages](http://erlang.org/download/) | `true` |
+| `dedicatedOtpNode` | Whether or not to start dedicated erlang node for OTP files handling. Such node can be shared between Erlang SRV instances. Basically, it speeds up initializing. | `true` |
 | `diagnostics` | List of diagnostic modules with their options | `[{"name": "compiler"}, {"name": "xref"}, {"name": "elvis"}, {"name": "unused_macros"}]` |
+
+### Sub-projects VS Dependencies
+
+|  | sub-project | dependency |
+| :- | :-: | :-: |
+| Main project depends on it | **YES** | **YES** |
+| Under development | **YES** | **NO** |
+| All declared capabilities supported | **YES** | **NO** |
+| Cached in memory | **Always** | **On demand** |
+
+### Dedicated OTP node
+
+By default all Erlang SRV instances share one common node to handle OTP related tasks.
+The first Erlang SRV instance starts dedicated OTP node while initializing, and all of the following instances just attach it.
+When all Erlang SRV instances terminated, the dedicated OTP node waits 1 min for new instances and terminates itself.
+
+Moreover you can start standalone dedicated OTP node from console:
+`./erlang_srv --otp-node <mode>` where `<mode>` is either `shortnames` or `longnames`.
+
+Basically using dedicated OTP node speeds up initializing process, however you can easily disable it by setting `dedicatedOtpNode` option to `false`.
+If dedicated OTP node is disabled, then all OTP related operations are performed in scope of Erlang SRV node.
 
 ## Diagnostics
 
@@ -162,3 +207,42 @@ Supported options:
 | Option | Description | Example |
 | :- | :- | :- |
 | `plts` | Explicit list of plt files | `["/path/to/plt/file_1", "/path/to/plt/file_2"]` |
+
+## Troubleshooting
+
+### Log messages
+
+By default Erlang SRV collects log messages to directory returned by `filename:basedir(user_log, "erlang_srv")` and appended by project name.
+Default log level is `info`.
+
+Log level and directory to collect messages may be specified via [command-line arguments](#Command-line Arguments)
+
+It is possible to log all language protocol messages: just setup `trace` log level.
+
+### Attaching to Erlang SRV node via a remote shell
+
+Once an instance of Erlang SRV is running, it is possible to open remote shell.
+
+First you need to find out erlang node name. Node name may be discovered in several ways:
+- From log file: search line like:
+`Distribution enabled: <0.151.0>; mode: longnames; node: 'esrv_erlang_srv_bec94da0@127.0.0.1'`
+- From `epmd` daemon: run `epmd -names`
+
+Then run remote shell:
+- in case of `shortnames` mode (default mode):
+`erl -sname debug -remsh esrv_erlang_srv_bec94da0@$(hostname)`
+- in case of `longnames` mode:
+`erl -name debug@127.0.0.1 -remsh esrv_erlang_srv_bec94da0@127.0.0.1`
+
+And feel free to introspect the system ([recon](https://ferd.github.io/recon/) onboard).
+
+### Disabling dedicated OTP node
+
+If Erlang SRV recursively crashes at startup, it may be reasonable to disable `dedicatedOtpNode` feature.
+See [configuration](#Configuration)
+
+### Cleanup
+
+To completely cleanup Erlang SRV persistent data:
+- Stop all Erlang SRV instances and all dedicated OTP nodes. Run `epmd -names` and/or `ps aux | grep erlang_srv` to ensure all nodes terminated.
+- Remove `mnesia` data. It is located in the directory returned by `filename:basedir(user_cache, "erlang_srv")` and appended by `"mnesia"`

@@ -12,7 +12,7 @@
 
 -type result() :: {location(), location(), binary()} | undefined.
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                                                          <<"character">> := Character},
                                      <<"textDocument">> := #{<<"uri">> := Uri}}}) ->
@@ -34,39 +34,39 @@ process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
 
 -spec process_poi_data(PoiData :: poi_data()) -> binary() | undefined.
 process_poi_data({macro, {MacroName, _}}) ->
-    atom_to_binary(MacroName, utf8);
+    esrv_req_lib:format_macro_name(MacroName);
 process_poi_data({Tag, Include}) when Tag =:= include orelse Tag =:= include_lib ->
     iolist_to_binary(["\"", Include, "\""]);
 process_poi_data({module, ModuleName}) ->
-    atom_to_binary(ModuleName, utf8);
+    esrv_req_lib:format_atom(ModuleName);
 process_poi_data({behavior, BehaviorName}) ->
-    atom_to_binary(BehaviorName, utf8);
+    esrv_req_lib:format_atom(BehaviorName);
 process_poi_data({callback, {CallbackName, _}}) ->
-    atom_to_binary(CallbackName, utf8);
+    esrv_req_lib:format_atom(CallbackName);
 process_poi_data({variable, Variable}) ->
     atom_to_binary(Variable, utf8);
 process_poi_data({record, RecordName}) ->
-    atom_to_binary(RecordName, utf8);
+    esrv_req_lib:format_atom(RecordName);
 process_poi_data({field, _, FieldName}) ->
-    atom_to_binary(FieldName, utf8);
+    esrv_req_lib:format_atom(FieldName);
 process_poi_data({local_type, {TypeName, _}}) ->
-    atom_to_binary(TypeName, utf8);
+    esrv_req_lib:format_atom(TypeName);
 process_poi_data({local_type_name, TypeName}) ->
-    atom_to_binary(TypeName, utf8);
+    esrv_req_lib:format_atom(TypeName);
 process_poi_data({remote_type, _, {TypeName, _}}) ->
-    atom_to_binary(TypeName, utf8);
+    esrv_req_lib:format_atom(TypeName);
 process_poi_data({remote_type_name, _, TypeName}) ->
-    atom_to_binary(TypeName, utf8);
+    esrv_req_lib:format_atom(TypeName);
 process_poi_data({Tag, {FunctionName, _}})
   when Tag =:= local_spec orelse Tag =:= function_clause orelse Tag =:= local_function ->
-    atom_to_binary(FunctionName, utf8);
+    esrv_req_lib:format_atom(FunctionName);
 process_poi_data({local_function_name, FunctionName}) ->
-    atom_to_binary(FunctionName, utf8);
+    esrv_req_lib:format_atom(FunctionName);
 process_poi_data({Tag, _, {FunctionName, _}})
   when Tag =:= remote_spec orelse Tag =:= remote_function ->
-    atom_to_binary(FunctionName, utf8);
+    esrv_req_lib:format_atom(FunctionName);
 process_poi_data({remote_function_name, _, FunctionName}) ->
-    atom_to_binary(FunctionName, utf8);
+    esrv_req_lib:format_atom(FunctionName);
 process_poi_data(_) ->
     undefined.
 

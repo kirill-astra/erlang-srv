@@ -4,26 +4,24 @@
 -include("parser.hrl").
 
 %% API
--export([parse/4,
-         parse/5]).
+-export([parse/3,
+         parse/4]).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 -spec parse(Uri :: uri(),
-            AppPath :: path(),
-            ModuleType :: module_type(),
+            AppId :: app_id() | undefined,
             Data :: binary()) -> module_data().
-parse(Uri, AppPath, ModuleType, Data) ->
-    parse(Uri, AppPath, ModuleType, Data, []).
+parse(Uri, AppId, Data) ->
+    parse(Uri, AppId, Data, []).
 
 -spec parse(Uri :: uri(),
-            AppPath :: path(),
-            ModuleType :: module_type(),
+            AppId :: app_id() | undefined,
             Data :: binary(),
             IncludeChain :: [uri()]) -> module_data().
-parse(Uri, AppPath, ModuleType, Data, IncludeChain) ->
-    TokensInfo = esrv_tokens_parser:parse(Uri, AppPath, ModuleType, Data, IncludeChain),
+parse(Uri, AppId, Data, IncludeChain) ->
+    TokensInfo = esrv_tokens_parser:parse(Uri, AppId, Data, IncludeChain),
     FormsInfo = esrv_forms_parser:parse(TokensInfo),
     ModuleInfo = esrv_module_parser:parse(Uri, TokensInfo, FormsInfo),
     compose_parsed_module(TokensInfo, ModuleInfo).

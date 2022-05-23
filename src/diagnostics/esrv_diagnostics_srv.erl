@@ -10,7 +10,7 @@
 %% API
 -export([start_link/0,
          register_diagnostic_modules/1,
-         request/3,
+         request/2,
          result/3,
          add_dependency/2]).
 
@@ -50,9 +50,9 @@ start_link() ->
 register_diagnostic_modules(DiagnosticModules) ->
     gen_statem:cast(?SERVER, {register_diagnostic_modules, DiagnosticModules}).
 
--spec request(Uri :: uri(), AppPath :: path(), ModuleType :: module_type()) -> ok.
-request(Uri, AppPath, ModuleType) ->
-    gen_statem:cast(?SERVER, {request, Uri, AppPath, ModuleType}).
+-spec request(Uri :: uri(), AppId :: app_id()) -> ok.
+request(Uri, AppId) ->
+    gen_statem:cast(?SERVER, {request, Uri, AppId}).
 
 -spec result(Worker :: pid(), Uri :: uri(), Diagnostics :: [diagnostic()]) -> ok.
 result(Worker, Uri, Diagnostics) ->
@@ -135,14 +135,14 @@ active(internal, init_modules, #data{diagnostic_modules = DiagnosticModules0} = 
                         end, DiagnosticModules0),
     {keep_state, Data0#data{diagnostic_modules = DiagnosticModules1}};
 
-active(internal, {diagnose, Uri, AppPath, ModuleType, PostDiagnostic},
+active(internal, {diagnose, Uri, AppId, PostDiagnostic},
        #data{diagnostic_modules = DiagnosticModules}) ->
     case DiagnosticModules of
         [_|_] ->
             {keep_state_and_data,
              [{next_event, internal, {apply_post_diagnostic, Uri, PostDiagnostic}},
               {next_event, internal, {cancel_diagnostic, Uri}},
-              {next_event, internal, {run_diagnostic, Uri, AppPath, ModuleType}}]};
+              {next_event, internal, {run_diagnostic, Uri, AppId}}]};
         [] ->
             keep_state_and_data
     end;
@@ -151,8 +151,8 @@ active(internal, {diagnose_dependent, Dependent0}, _) ->
     Dependent1 = sets:filter(fun(U) -> esrv_db:read_text_document(U) =/= [] end, Dependent0),
     {keep_state_and_data,
      sets:fold(fun(U, Acc) ->
-                       {AppPath, ModuleType} = esrv_lib:app_path_and_module_type(U),
-                       [{next_event, internal, {diagnose, U, AppPath, ModuleType, false}} | Acc]
+                       AppId = esrv_lib:get_app_id(U),
+                       [{next_event, internal, {diagnose, U, AppId, false}} | Acc]
                end, [], Dependent1)};
 
 active(internal, {apply_post_diagnostic, Uri, PostDiagnostic0},
@@ -173,13 +173,13 @@ active(internal, {cancel_diagnostic, Uri}, #data{uris = Uris0} = Data0) ->
             keep_state_and_data
     end;
 
-active(internal, {run_diagnostic, Uri, AppPath, ModuleType},
+active(internal, {run_diagnostic, Uri, AppId},
        #data{diagnostic_modules = DiagnosticModules, uris = Uris0} = Data0) ->
     ok = send_notification(Uri, []),
     Workers =
         lists:foldl(fun({Module, Options}, Acc) ->
                             {ok, Worker} = esrv_diagnostic_worker_sup:start_worker(Module, Options),
-                            ok = esrv_diagnostic_worker:run(Worker, Uri, AppPath, ModuleType),
+                            ok = esrv_diagnostic_worker:run(Worker, Uri, AppId),
                             [Worker | Acc]
                     end, [], DiagnosticModules),
     UriData =
@@ -234,8 +234,8 @@ active(EventType, EventContent, Data) ->
           gen_statem:state_enter_result(term());
                   (gen_statem:event_type(), Msg :: term(), State :: term(), Data :: term()) ->
           gen_statem:event_handler_result(term()).
-handle_event(cast, {request, Uri, AppPath, ModuleType}, _, _) ->
-    {keep_state_and_data, [{next_event, internal, {diagnose, Uri, AppPath, ModuleType, true}}]};
+handle_event(cast, {request, Uri, AppId}, _, _) ->
+    {keep_state_and_data, [{next_event, internal, {diagnose, Uri, AppId, true}}]};
 
 handle_event(cast, {add_dependency, ModuleName, Uri}, _,
              #data{dependencies = Dependencies0} = Data0) ->
@@ -410,7 +410,7 @@ apply_progress(Uri, #uri_data{total_workers = TotalWorkers,
 -spec dependent_on_header(HrlUri :: uri()) -> sets:set(uri()).
 dependent_on_header(HrlUri) ->
     Processor =
-        fun(Uri, #module_data{include_data = #include_data{resolved = Resolved}}, Acc) ->
+        fun({Uri, #module_data{include_data = #include_data{resolved = Resolved}}}, Acc) ->
                 Acc#{Uri => maps:keys(Resolved)}
         end,
     PerUriIncluded = esrv_req_lib:traverse_proj_modules(Processor, #{}),

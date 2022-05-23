@@ -4,7 +4,7 @@
 
 %% API
 -export([init/1,
-         run/4]).
+         run/3]).
 
 -include("types.hrl").
 -include("protocol.hrl").
@@ -114,31 +114,38 @@ valid_extra_options(Option) ->
 %%------------------------------------------------------------------------------
 %% Run
 %%------------------------------------------------------------------------------
--spec run(Uri :: uri(), AppPath :: path(), ModuleType :: module_type(), Options :: map()) ->
-          [diagnostic()].
-run(_, _, otp, _) ->
-    [];
-run(Uri, AppPath, ModuleType, Options) ->
+-spec run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+run(Uri, undefined, Options) ->
+    do_run(Uri, undefined, Options);
+run(Uri, AppId, Options) ->
+    case esrv_lib:get_app_type(AppId) of
+        {ok, AppType} when AppType =:= proj orelse AppType =:= sub_proj ->
+            do_run(Uri, AppId, Options);
+        _ ->
+            []
+    end.
+
+-spec do_run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+do_run(Uri, AppId, Options) ->
     Filename = esrv_lib:uri_to_file(Uri),
     case filename:extension(Filename) of
         ".erl" ->
             ensure_dependencies(Uri, Options),
-            process_erl(Filename, AppPath, ModuleType, Options);
+            process_erl(Filename, AppId, Options);
         ".hrl" ->
-            process_hrl(Filename, AppPath, ModuleType);
+            process_hrl(Filename, AppId);
         ".escript" ->
-            process_escript(Filename, AppPath, ModuleType)
+            process_escript(Filename, AppId)
     end.
 
 -spec process_erl(Filename :: file:filename(),
-                  AppPath :: path(),
-                  ModuleType :: module_type(),
+                  AppId :: app_id() | undefined,
                   Options :: map()) -> [diagnostic()].
-process_erl(Filename, AppPath, ModuleType, Options) ->
+process_erl(Filename, AppId, Options) ->
     CompileOptions1 = add_deploy_options(Options, [return]),
     CompileOptions2 = add_strong_validation_option(CompileOptions1),
     CompileOptions3 = add_extra_options(Options, CompileOptions2),
-    case compile_file(Filename, AppPath, ModuleType, CompileOptions3) of
+    case compile_file(Filename, AppId, CompileOptions3) of
         {ok, _, Warnings} ->
             diagnostics(Filename, [{Warnings, ?DIAGNOSTIC_WARNING}]);
         {ok, ModuleName, Binary, Warnings} ->
@@ -149,11 +156,9 @@ process_erl(Filename, AppPath, ModuleType, Options) ->
                                    {Warnings, ?DIAGNOSTIC_WARNING}])
     end.
 
--spec process_hrl(Filename :: file:filename(),
-                  AppPath :: path(),
-                  ModuleType :: module_type()) -> [diagnostic()].
-process_hrl(Filename, AppPath, ModuleType) ->
-    Errors = [ Error || {error, Error} <- epp_forms(Filename, AppPath, ModuleType) ],
+-spec process_hrl(Filename :: file:filename(), AppId :: app_id() | undefined) -> [diagnostic()].
+process_hrl(Filename, AppId) ->
+    Errors = [ Error || {error, Error} <- epp_forms(Filename, AppId) ],
     case Errors of
         [_|_] ->
             diagnostics(Filename, [{[{Filename, Errors}], ?DIAGNOSTIC_ERROR}]);
@@ -161,20 +166,18 @@ process_hrl(Filename, AppPath, ModuleType) ->
             []
     end.
 
--spec process_escript(Filename :: file:filename(),
-                      AppPath :: path(),
-                      ModuleType :: module_type()) -> [diagnostic()].
-process_escript(Filename, AppPath, ModuleType) ->
+-spec process_escript(Filename :: file:filename(), AppId :: app_id() | undefined) -> [diagnostic()].
+process_escript(Filename, AppId) ->
     {ok, FileContent} = file:read_file(Filename),
     case esrv_lib:get_escript_src(FileContent) of
         {ok, SrcContent} ->
             TmpFilename = tmp_filename(Filename),
             ok = filelib:ensure_dir(TmpFilename),
             ok = file:write_file(TmpFilename, SrcContent),
-            Forms0 = epp_forms(TmpFilename, AppPath, ModuleType),
+            Forms0 = epp_forms(TmpFilename, AppId),
             Forms1 = complete_escript_forms(TmpFilename, Forms0),
             ok = file:delete(TmpFilename),
-            case compile_forms(Forms1, AppPath, ModuleType, [return, strong_validation]) of
+            case compile_forms(Forms1, AppId, [return, strong_validation]) of
                 {ok, _, Warnings} ->
                     diagnostics(TmpFilename, [{Warnings, ?DIAGNOSTIC_WARNING}]);
                 {error, Errors, Warnings} ->
@@ -239,11 +242,9 @@ tmp_filename(Filename) ->
                              filename:basename(Filename)]),
     esrv_lib:path_to_file(TmpPath).
 
--spec epp_forms(Filename :: file:filename(),
-                AppPath :: path(),
-                ModuleType :: module_type()) -> [epp_form()].
-epp_forms(Filename, AppPath, ModuleType) ->
-    {ok, Epp} = epp:open(Filename, esrv_lib:includes(AppPath, ModuleType), esrv_lib:defines()),
+-spec epp_forms(Filename :: file:filename(), AppId :: app_id() | undefined) -> [epp_form()].
+epp_forms(Filename, AppId) ->
+    {ok, Epp} = epp:open(Filename, esrv_lib:includes(AppId), esrv_lib:defines()),
     EppForms = epp:parse_file(Epp),
     ok = epp:close(Epp),
     EppForms.
@@ -252,19 +253,17 @@ epp_forms(Filename, AppPath, ModuleType) ->
 %% Compiling
 %%------------------------------------------------------------------------------
 -spec compile_file(Filename :: file:filename(),
-                   AppPath :: path(),
-                   ModuleType :: module_type(),
+                   AppId :: app_id() | undefined,
                    CompileOptions :: [compile:option()]) -> any().
-compile_file(Filename, AppPath, ModuleType, CompileOptions0) ->
-    CompileOptions1 = add_basic_options(AppPath, ModuleType, CompileOptions0),
+compile_file(Filename, AppId, CompileOptions0) ->
+    CompileOptions1 = add_basic_options(AppId, CompileOptions0),
     compile:file(Filename, CompileOptions1).
 
 -spec compile_forms(Forms :: [epp_form()],
-                    AppPath :: path(),
-                    ModuleType :: module_type(),
+                    AppId :: app_id() | undefined,
                     CompileOptions :: [compile:option()]) -> any().
-compile_forms(Forms, AppPath, ModuleType, CompileOptions0) ->
-    CompileOptions1 = add_basic_options(AppPath, ModuleType, CompileOptions0),
+compile_forms(Forms, AppId, CompileOptions0) ->
+    CompileOptions1 = add_basic_options(AppId, CompileOptions0),
     compile:forms(Forms, CompileOptions1).
 
 -spec add_deploy_options(Options :: map(), CompileOptions :: [compile:option()]) ->
@@ -290,12 +289,11 @@ add_extra_options(#{<<"extraOptions">> := ExtraOptions}, CompileOptions0) ->
 add_extra_options(_, CompileOptions) ->
     CompileOptions.
 
--spec add_basic_options(AppPath :: path(),
-                        ModuleType :: module_type(),
+-spec add_basic_options(AppId :: app_id() | undefined,
                         CompileOptions :: [compile:option()]) -> [compile:option()].
-add_basic_options(AppPath, ModuleType, CompileOptions0) ->
+add_basic_options(AppId, CompileOptions0) ->
     CompileOptions0 ++
-        [ {i, I} || I <- esrv_lib:includes(AppPath, ModuleType) ] ++
+        [ {i, I} || I <- esrv_lib:includes(AppId) ] ++
         [ {d, K, V} || {K, V} <- esrv_lib:defines() ].
 
 -spec add_option(CompileOption :: compile:option(), CompileOptions :: [compile:option()]) ->
@@ -384,7 +382,7 @@ process_module(Module, #deps_info{processed = Processed0, target_uri = TargetUri
         false ->
             DepsInfo1 = DepsInfo0#deps_info{processed = sets:add_element(Module, Processed0)},
             case esrv_db:read_module_meta_by_name(Module) of
-                [#module_meta{module_type = otp} | _] ->
+                [#module_meta{app_type = otp} | _] ->
                     do_load_module(Module),
                     DepsInfo1;
                 [#module_meta{uri = Uri, hash = Hash} | _] ->
@@ -419,8 +417,8 @@ do_compile_and_load(Uri, Hash, DepsInfo0) ->
         _ ->
             DepsInfo1 = do_ensure_dependencies(Uri, DepsInfo0),
             Filename = esrv_lib:uri_to_file(Uri),
-            {AppPath, ModuleType} = esrv_lib:app_path_and_module_type(Uri),
-            case compile_file(Filename, AppPath, ModuleType, [binary]) of
+            AppId = esrv_lib:get_app_id(Uri),
+            case compile_file(Filename, AppId, [binary]) of
                 {ok, Module, Binary} ->
                     case code:load_binary(Module, Filename, Binary) of
                         {module, Module} ->

@@ -12,7 +12,7 @@
 
 -type item() :: jsx:json_term().
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = Item0}) ->
     Item1 =
         case parse_data(Item0) of

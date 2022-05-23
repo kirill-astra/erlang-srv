@@ -1,4 +1,4 @@
--module(erlang_srv_sup).
+-module(esrv_otp_node_sup).
 
 -behaviour(supervisor).
 
@@ -36,26 +36,14 @@ init([]) ->
                  intensity => 0,
                  period => 1},
     ChildSpecs = [
-                  #{id => esrv_man_mgr,
-                    start => {esrv_man_mgr, start_link, []}},
+                  #{id => esrv_otp_node_request_srv,
+                    start => {esrv_otp_node_request_srv, start_link, []}},
+                  #{id => esrv_otp_node_mgr,
+                    start => {esrv_otp_node_mgr, start_link, []}},
                   #{id => esrv_cache_mgr,
                     start => {esrv_cache_mgr, start_link, []}},
-                  #{id => esrv_progress_srv,
-                    start => {esrv_progress_srv, start_link, []}},
-                  #{id => esrv_dynamic_sup,
-                    start => {esrv_dynamic_sup, start_link, []},
-                    type => supervisor},
-                  #{id => esrv_diagnostics_sup,
-                    start => {esrv_diagnostics_sup, start_link, []},
-                    type => supervisor},
-                  #{id => esrv_main_fsm,
-                    start => {esrv_main_fsm, start_link, []}},
-                  #{id => esrv_otp_node_controller,
-                    start => {esrv_otp_node_controller, start_link, []}},
                   #{id => esrv_index_mgr,
-                    start => {esrv_index_mgr, start_link, []}},
-                  #{id => esrv_client_gw,
-                    start => {esrv_client_gw, start_link, []}}
+                    start => {esrv_index_mgr, start_link, []}}
                  ],
     {ok, {SupFlags, ChildSpecs}}.
 

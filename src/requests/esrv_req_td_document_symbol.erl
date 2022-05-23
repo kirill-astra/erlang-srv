@@ -12,7 +12,7 @@
 -type kind() :: 1..26.
 -type item() :: {binary(), location(), kind()}.
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"textDocument">> := #{<<"uri">> := Uri}}}) ->
     Result =
         case esrv_index_mgr:get_current_module_data(Uri) of

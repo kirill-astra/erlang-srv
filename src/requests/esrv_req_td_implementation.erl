@@ -9,7 +9,7 @@
 -include("parser.hrl").
 -include("records.hrl").
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                                                          <<"character">> := Character},
                                      <<"textDocument">> := #{<<"uri">> := Uri}}}) ->

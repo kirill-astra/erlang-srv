@@ -42,9 +42,8 @@ process_target(TargetUri, TargetLocation) ->
 -spec process_poi(TargetUri :: uri(), ModuleData :: module_data(), Poi :: poi()) ->
           {ok, uri(), location()} | undefined.
 process_poi(TargetUri, _, #poi{data = {include, Include}}) ->
-    Path = esrv_lib:uri_to_path(TargetUri),
-    IncluderDir = filename:dirname(Path),
-    case esrv_lib:find_included_uri(IncluderDir, Include) of
+    AppId = esrv_lib:get_app_id(TargetUri),
+    case esrv_lib:find_included_uri(TargetUri, AppId, Include) of
         {ok, IncludedUri} ->
             {ok, IncludedUri, {1, 1}};
         undefined ->

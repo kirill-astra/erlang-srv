@@ -28,16 +28,20 @@ do_process(#request{id = Id, params = Params}) ->
     InitOptions = get_init_options(Params),
     ConfigOptions = get_config_options(ProjPath, InitOptions),
     OptionsToApply =
-        [{otp_apps_exclude, <<"otpAppsExclude">>, undefined},
+        [{sub_proj_dirs, <<"subProjDirs">>, [<<"_checkouts">>]},
+         {sub_projs, <<"subProjs">>, undefined},
+         {dep_dirs, <<"depDirs">>, [<<"deps">>, <<"_build/default/lib">>]},
+         {deps, <<"deps">>, undefined},
+         {apps_ignore, <<"appsIgnore">>, undefined},
          {apps_dirs, <<"appsDirs">>, [<<"src">>, <<"test">>, <<"include">>]},
-         {deps_dirs, <<"depsDirs">>, [<<"deps">>, <<"_checkouts">>, <<"_build/default/lib">>]},
-         {include_dirs, <<"includeDirs">>, [<<"include">>]},
+         {include_dirs, <<"includeDirs">>, [<<"include">>, <<"src/hrl">>]},
          {extra_paths, <<"extraPaths">>, undefined},
          {distr_mode, <<"distrMode">>, <<"shortnames">>},
          {macros, <<"macros">>, undefined},
-         {sync_otp_man, <<"syncOtpMan">>, undefined}],
+         {sync_otp_man, <<"syncOtpMan">>, true},
+         {dedicated_otp_node, <<"dedicatedOtpNode">>, true}],
     ok = apply_options(OptionsToApply, ConfigOptions, InitOptions),
-    ok = esrv_distributed:initialize(),
+    ok = esrv_distributed:initialize_ls(),
     ok = init_extra_paths(),
     DefaultDiagnostics =
         [#{<<"name">> => <<"compiler">>, <<"enabled">> => true},
@@ -49,6 +53,10 @@ do_process(#request{id = Id, params = Params}) ->
     ok = init_predefined_macros(),
     ok = esrv_man_mgr:initialize(),
     ok = esrv_db:initialize(),
+    ok = esrv_otp_node_controller:initialize(),
+    ok = scan_applications(),
+    ProgressToken = maps:get(<<"workDoneToken">>, Params, undefined),
+    ok = index_applications(ProgressToken),
     Response =
         #response{id = Id,
                   result = #{<<"capabilities">> => server_capabilities(),
@@ -345,3 +353,143 @@ init_predefined_macros() ->
                             PredefinedMacros00
                     end, PredefinedMacros0, esrv_config:get_value(macros, [])),
     esrv_config:set_value(predefined_macros, PredefinedMacros1).
+
+-spec scan_applications() -> ok.
+scan_applications() ->
+    ok = scan_otp_applications(),
+    ok = scan_deps_applications(),
+    ok = scan_sub_proj_applications(),
+    ok = scan_proj_application().
+
+-spec scan_otp_applications() -> ok.
+scan_otp_applications() ->
+    AppPaths = esrv_lib:scan_dirs([esrv_lib:get_otp_path(), <<"lib">>, <<"*">>]),
+    lists:foreach(fun scan_otp_application/1, AppPaths).
+
+-spec scan_otp_application(AppPath :: path()) -> ok.
+scan_otp_application(AppPath) ->
+    case re:run(AppPath, "^.*/(.*)-[0-9\\.]*$", [{capture, all_but_first, binary}]) of
+        {match, [OtpApp]} ->
+            ok = apply_scanned_application(OtpApp, otp, AppPath);
+        nomatch ->
+            ok
+    end.
+
+-spec scan_deps_applications() -> ok.
+scan_deps_applications() ->
+    Deps0 = esrv_lib:get_deps(),
+    Deps1 = lists:foldl(fun(DepDir, Deps00) ->
+                                ToSkip = [filename:join(DepDir, <<".rebar3">>)],
+                                esrv_lib:scan_dirs([DepDir, <<"*">>], ToSkip) ++ Deps00
+                        end, Deps0, esrv_lib:get_dep_dirs()),
+    lists:foreach(fun(Dep) ->
+                          DepApp = filename:basename(Dep),
+                          apply_scanned_application(DepApp, deps, Dep)
+                  end, lists:usort(Deps1)).
+
+-spec scan_sub_proj_applications() -> ok.
+scan_sub_proj_applications() ->
+    SubProjs0 = esrv_lib:get_sub_projs(),
+    SubProjs1 = lists:foldl(fun(SubProj, SubProjs00) ->
+                                    ToSkip = [filename:join(SubProj, <<".rebar3">>)],
+                                    esrv_lib:scan_dirs([SubProj, <<"*">>], ToSkip) ++ SubProjs00
+                            end, SubProjs0, esrv_lib:get_sub_proj_dirs()),
+    lists:foreach(fun(SubProj) ->
+                          SubProjApp = filename:basename(SubProj),
+                          apply_scanned_application(SubProjApp, sub_proj, SubProj)
+                  end, lists:usort(SubProjs1)).
+
+-spec scan_proj_application() -> ok.
+scan_proj_application() ->
+    {ok, ProjPath} = esrv_config:get_value(proj_path),
+    ProjApp = filename:basename(ProjPath),
+    store_scanned_application(ProjApp, proj, ProjPath).
+
+-spec apply_scanned_application(Name :: binary(), Type :: app_type(), Path :: path()) -> ok.
+apply_scanned_application(Name, Type, Path) ->
+    AppsIgnore = esrv_config:get_value(apps_ignore, []),
+    case lists:member(Name, AppsIgnore) of
+        false ->
+            store_scanned_application(Name, Type, Path);
+        true ->
+            ?LOG_DEBUG("Application '~s' (~p) skipped", [Name])
+    end.
+
+-spec store_scanned_application(AppName :: binary(),
+                                AppType :: app_type(),
+                                AppPath :: path()) -> ok.
+store_scanned_application(AppName, AppType, AppPath) ->
+    AppId = binary_to_atom(AppName, utf8),
+    case esrv_db:read_scanned_app(AppId) of
+        [#scanned_app{type = PrevType}] ->
+            ?LOG_WARNING("Application '~s' (~p overwrites ~p) scanned: ~s",
+                         [AppName, AppType, PrevType, AppPath]);
+        [] ->
+            ?LOG_DEBUG("Application '~s' (~p) scanned: ~s", [AppName, AppType, AppPath])
+    end,
+    esrv_db:write_scanned_app(AppId, AppType, AppPath).
+
+-spec index_applications(Token :: lp_token() | undefined) -> ok.
+index_applications(Token) ->
+    TargetPaths = esrv_lib:get_target_paths(),
+    ok = notify_start(Token),
+    lists:foreach(fun({AppType, Percentage}) ->
+                          ok = notify_indexing(Token, Percentage, AppType),
+                          ok = index_applications(AppType, TargetPaths)
+                  end, [{otp, 20}, {deps, 40}, {sub_proj, 60}, {proj, 80}]),
+    ok = notify_end(Token).
+
+-spec index_applications(AppType :: app_type(), TargetPaths :: [path()]) -> ok.
+index_applications(otp, _) ->
+    ScannedApps = esrv_db:read_scanned_app_by_type(otp),
+    case esrv_otp_node_controller:get_otp_node() of
+        {ok, OtpNode} ->
+            ok = rpc:call(OtpNode,
+                          esrv_otp_node_request_srv,
+                          ensure_indexed,
+                          [ScannedApps]);
+        undefined ->
+            esrv_index_mgr:process_applications(ScannedApps, [])
+    end;
+index_applications(AppType, TargetPaths) ->
+    ScannedApps = esrv_db:read_scanned_app_by_type(AppType),
+    esrv_index_mgr:process_applications(ScannedApps, TargetPaths).
+
+-spec notify_start(Token :: lp_token() | undefined) -> ok.
+notify_start(undefined) ->
+    ok;
+notify_start(Token) ->
+    Notification =
+        #notification{method = <<"$/progress">>,
+                      params = [{<<"token">>, Token},
+                                {<<"value">>, [{<<"kind">>, 'begin'},
+                                               {<<"title">>, <<"Indexing project">>},
+                                               {<<"cancellable">>, false},
+                                               {<<"percentage">>, 0}]}]},
+    ok = esrv_main_fsm:notification(Notification).
+
+-spec notify_indexing(Token :: lp_token() | undefined,
+                      Percentage :: integer(),
+                      Type :: app_type()) -> ok.
+notify_indexing(undefined, _, _) ->
+    ok;
+notify_indexing(Token, Percentage, Type) ->
+    Message = io_lib:format("Indexing '~s' modules", [Type]),
+    Notification =
+        #notification{method = <<"$/progress">>,
+                      params = [{<<"token">>, Token},
+                                {<<"value">>, [{<<"kind">>, report},
+                                               {<<"message">>, iolist_to_binary(Message)},
+                                               {<<"percentage">>, Percentage}]}]},
+    ok = esrv_main_fsm:notification(Notification).
+
+-spec notify_end(Token :: lp_token() | undefined) -> ok.
+notify_end(undefined) ->
+    ok;
+notify_end(Token) ->
+    Notification =
+        #notification{method = <<"$/progress">>,
+                      params = [{<<"token">>, Token},
+                                {<<"value">>, [{<<"kind">>, 'end'},
+                                               {<<"message">>, <<"Project indexed">>}]}]},
+    ok = esrv_main_fsm:notification(Notification).

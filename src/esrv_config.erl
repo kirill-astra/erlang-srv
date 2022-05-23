@@ -1,6 +1,7 @@
 -module(esrv_config).
 
--export([create/0,
+-export([start/0,
+         create/0,
          fetch_value/1,
          get_value/1,
          get_value/2,
@@ -11,9 +12,15 @@
 
 -define(TABLE_NAME, esrv_config).
 
+-spec start() -> ok.
+start() ->
+    spawn(fun() -> create(), receive _ -> ok end end),
+    ok.
+
 -spec create() -> ok.
 create() ->
-    ets:new(?TABLE_NAME, [named_table, public]), ok.
+    ets:new(?TABLE_NAME, [named_table, public]),
+    ok.
 
 -spec fetch_value(Key :: key()) -> value().
 fetch_value(Key) ->

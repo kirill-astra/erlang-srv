@@ -13,7 +13,7 @@
 -type kind() :: 1..26.
 -type item() :: {binary(), uri(), location(), kind()}.
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"query">> := Query0}}) ->
     Query1 = string:trim(Query0),
     case re:compile(Query1) of

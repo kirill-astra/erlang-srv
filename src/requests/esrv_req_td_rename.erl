@@ -15,21 +15,24 @@
 
 -type document_change_item() :: ok.
 
--spec process(Request :: request()) -> {response, #response{}}.
+-define(TRAVERSE_PROJ_MODULES, esrv_req_lib:traverse_proj_modules).
+
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                                                          <<"character">> := Character},
                                      <<"textDocument">> := #{<<"uri">> := Uri},
                                      <<"newName">> := NewName}}) ->
     {ok, ModuleData} = esrv_index_mgr:get_current_module_data(Uri),
-    {EditItems, RenameItems} =
+    {EditItems, RenameItems, TargetName} =
         case esrv_req_lib:get_poi(false, {Line + 1, Character + 1}, Uri, ModuleData) of
             {ok, Poi} ->
                 {process_edits(Poi, Uri, ModuleData),
-                 process_renames(Poi, NewName)};
+                 process_renames(Poi, NewName),
+                 process_target_name(Poi, NewName)};
             undefined ->
-                {[], []}
+                {[], [], NewName}
         end,
-    Result = format_result(NewName, EditItems, RenameItems),
+    Result = format_result(TargetName, EditItems, RenameItems),
     {response, #response{id = Id, result = Result}}.
 
 -spec process_edits(Poi :: poi(), Uri :: uri(), ModuleData :: module_data()) -> [edit_item()].
@@ -74,7 +77,7 @@ process_macro(Uri, ModuleData, #poi{data = PoiData, definition = undefined}) ->
 
 -spec process_callback(NameArity :: name_arity(), ModuleData :: module_data()) -> [edit_item()].
 process_callback(NameArity, #module_data{module_name = {ModuleName, _}}) ->
-    Processor = fun(Uri, #module_data{behaviors = Behaviors} = ModuleData, Acc) ->
+    Processor = fun({Uri, #module_data{behaviors = Behaviors} = ModuleData}, Acc) ->
                         case maps:is_key(ModuleName, Behaviors) of
                             true ->
                                 Targets = [{local_spec, NameArity},
@@ -85,7 +88,7 @@ process_callback(NameArity, #module_data{module_name = {ModuleName, _}}) ->
                                 Acc
                         end
                 end,
-    esrv_req_lib:traverse_proj_modules(Processor, []);
+    ?TRAVERSE_PROJ_MODULES(Processor, []);
 process_callback(_, _) ->
     [].
 
@@ -154,27 +157,27 @@ process_remote_type(ModuleName, NameArity) ->
         {ok, {DefinitionUri, _}} ->
             add_type_items(DefinitionUri, NameArity, sets:from_list([ModuleName]));
         undefined ->
-            esrv_req_lib:traverse_proj_modules(fun(U, MD, Acc) ->
-                                                       ToCollect = [{remote_type,
-                                                                     ModuleName,
-                                                                     NameArity}],
-                                                       process_pois(U, MD, ToCollect, Acc)
-                                               end, [])
+            ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Acc) ->
+                                           ToCollect = [{remote_type,
+                                                         ModuleName,
+                                                         NameArity}],
+                                           process_pois(U, MD, ToCollect, Acc)
+                                   end, [])
     end.
 
 -spec process_bit_calls(NameArity :: name_arity()) -> [edit_item()].
 process_bit_calls(NameArity) ->
-    esrv_req_lib:traverse_proj_modules(fun(U, MD, Acc) ->
-                                               ToCollect = [{local_type, NameArity}],
-                                               process_pois(U, MD, ToCollect, Acc)
-                                       end, []).
+    ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Acc) ->
+                                   ToCollect = [{local_type, NameArity}],
+                                   process_pois(U, MD, ToCollect, Acc)
+                           end, []).
 
 -spec add_type_items(DefinitionUri :: uri(),
                      NameArity :: name_arity(),
                      ModulesSet :: sets:set(module())) -> [edit_item()].
 add_type_items(DefinitionUri, NameArity, ModulesSet0) ->
     Processor =
-        fun(U, MD, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
+        fun({U, MD}, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
                 Items01 = process_pois(U, MD, [{local_type, NameArity}], Items00),
                 {ExportedToSkip01, ExportedType} =
                     esrv_req_lib:get_exported_type(U, MD, NameArity, ExportedToSkip00),
@@ -203,9 +206,9 @@ add_type_items(DefinitionUri, NameArity, ModulesSet0) ->
                 sets:fold(fun(ModuleName, Acc) ->
                                   [{remote_type, ModuleName, NameArity} | Acc]
                           end, [], ModulesSet1),
-            esrv_req_lib:traverse_proj_modules(fun(U, MD, Items10) ->
-                                                       process_pois(U, MD, ToCollect, Items10)
-                                               end, Items1);
+            ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Items10) ->
+                                           process_pois(U, MD, ToCollect, Items10)
+                                   end, Items1);
         true ->
             Items1
     end.
@@ -240,27 +243,27 @@ process_remote_function(ModuleName, NameArity) ->
         {ok, {DefinitionUri, _}} ->
             add_function_items(DefinitionUri, NameArity, sets:from_list([ModuleName]));
         undefined ->
-            esrv_req_lib:traverse_proj_modules(fun(U, MD, Acc) ->
-                                                       ToCollect = [{remote_function,
-                                                                     ModuleName,
-                                                                     NameArity}],
-                                                       process_pois(U, MD, ToCollect, Acc)
-                                               end, [])
+            ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Acc) ->
+                                           ToCollect = [{remote_function,
+                                                         ModuleName,
+                                                         NameArity}],
+                                           process_pois(U, MD, ToCollect, Acc)
+                                   end, [])
     end.
 
 -spec process_bif_calls(NameArity :: name_arity()) -> [edit_item()].
 process_bif_calls(NameArity) ->
-    esrv_req_lib:traverse_proj_modules(fun(U, MD, Acc) ->
-                                               ToCollect = [{remote_function, erlang, NameArity}],
-                                               process_pois(U, MD, ToCollect, Acc)
-                                       end, []).
+    ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Acc) ->
+                                   ToCollect = [{remote_function, erlang, NameArity}],
+                                   process_pois(U, MD, ToCollect, Acc)
+                           end, []).
 
 -spec add_function_items(DefinitionUri :: uri(),
                          NameArity :: name_arity(),
                          ModulesSet :: sets:set(module())) -> [edit_item()].
 add_function_items(DefinitionUri, NameArity, ModulesSet0) ->
     Processor =
-        fun(U, MD, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
+        fun({U, MD}, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
                 Items01 = process_pois(U, MD, [{local_spec, NameArity},
                                                {local_function, NameArity},
                                                {function_clause, NameArity}], Items00),
@@ -292,21 +295,21 @@ add_function_items(DefinitionUri, NameArity, ModulesSet0) ->
                                   [{remote_spec, ModuleName, NameArity},
                                    {remote_function, ModuleName, NameArity} | Acc]
                           end, [], ModulesSet1),
-            esrv_req_lib:traverse_proj_modules(fun(U, MD, Items10) ->
-                                                       process_pois(U, MD, ToCollect, Items10)
-                                               end, Items1);
+            ?TRAVERSE_PROJ_MODULES(fun({U, MD}, Items10) ->
+                                           process_pois(U, MD, ToCollect, Items10)
+                                   end, Items1);
         true ->
             Items1
     end.
 
 -spec process_plain(Targets :: [poi_data()]) -> [edit_item()].
 process_plain(Targets) ->
-    Processor = fun(U, MD, A) -> process_pois(U, MD, Targets, A) end,
-    esrv_req_lib:traverse_proj_modules(Processor, []).
+    Processor = fun({U, MD}, A) -> process_pois(U, MD, Targets, A) end,
+    ?TRAVERSE_PROJ_MODULES(Processor, []).
 
 -spec process_definition(PoiData :: poi_data(), DefinitionUri :: uri()) -> [edit_item()].
 process_definition(PoiData, DefinitionUri) ->
-    Processor = fun(U, MD, A) -> process_pois(U, MD, [PoiData], A) end,
+    Processor = fun({U, MD}, A) -> process_pois(U, MD, [PoiData], A) end,
     esrv_req_lib:traverse_by_definition(Processor, DefinitionUri, []).
 
 -spec process_pois(Uri :: uri(),
@@ -327,9 +330,10 @@ process_pois(Uri, ModuleData, Targets, Acc0) ->
 process_renames(#poi{data = {Tag, Name}}, NewName)
   when Tag =:= module orelse Tag =:= behavior ->
     case esrv_db:read_module_meta_by_name(Name) of
-        [#module_meta{module_type = proj, uri = OldUri}] ->
+        [#module_meta{app_type = AppType, uri = OldUri}]
+          when AppType =:= proj orelse AppType =:= sub_proj ->
             RegExp = [<<"^(.*/)">>, atom_to_binary(Name, utf8), <<"(\\.erl)$">>],
-            Replacement = [<<"\\1">>, NewName, <<"\\2">>],
+            Replacement = [<<"\\1">>, strip_name(NewName), <<"\\2">>],
             case re:replace(OldUri, RegExp, Replacement, [{return, binary}]) of
                 NewUri when NewUri =/= OldUri ->
                     [{OldUri, NewUri}];
@@ -341,6 +345,75 @@ process_renames(#poi{data = {Tag, Name}}, NewName)
     end;
 process_renames(_, _) ->
     [].
+
+-spec process_target_name(Poi :: poi(), NewName :: binary()) -> binary().
+process_target_name(#poi{data = {macro, {MacroName, _}}}, NewName) ->
+    format_new_name(MacroName, NewName, fun esrv_req_lib:format_macro_name/1);
+process_target_name(#poi{data = {module, ModuleName}}, NewName) ->
+    format_new_name(ModuleName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {behavior, BehaviorName}}, NewName) ->
+    format_new_name(BehaviorName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {callback, {CallbackName, _}}}, NewName) ->
+    format_new_name(CallbackName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {record, RecordName}}, NewName) ->
+    format_new_name(RecordName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {field, _, FieldName}}, NewName) ->
+    format_new_name(FieldName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {local_type, {TypeName, _}}}, NewName) ->
+    format_new_name(TypeName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {local_type_name, TypeName}}, NewName) ->
+    format_new_name(TypeName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {remote_type, _, {TypeName, _}}}, NewName) ->
+    format_new_name(TypeName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {remote_type_name, _, TypeName}}, NewName) ->
+    format_new_name(TypeName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {Tag, {FunctionName, _}}}, NewName)
+  when Tag =:= local_spec orelse Tag =:= function_clause orelse Tag =:= local_function ->
+    format_new_name(FunctionName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {local_function_name, FunctionName}}, NewName) ->
+    format_new_name(FunctionName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {Tag, _, {FunctionName, _}}}, NewName)
+  when Tag =:= remote_spec orelse Tag =:= remote_function ->
+    format_new_name(FunctionName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(#poi{data = {remote_function_name, _, FunctionName}}, NewName) ->
+    format_new_name(FunctionName, NewName, fun esrv_req_lib:format_atom/1);
+process_target_name(_, NewName) ->
+    NewName.
+
+-spec format_new_name(OldName :: name(),
+                      NewName :: binary(),
+                      Formatter :: fun((name()) -> binary())) -> binary().
+format_new_name(OldName, NewName, Formatter) ->
+    FormattedOldName = Formatter(OldName),
+    StrippedNewName = strip_name(NewName),
+    FormattedNewName = Formatter(binary_to_atom(StrippedNewName, utf8)),
+    if
+        FormattedOldName =:= FormattedNewName ->
+            case {is_name_quoted(FormattedOldName), is_name_quoted(NewName)} of
+                {false, true} ->
+                    <<$', FormattedNewName/binary, $'>>;
+                _ ->
+                    FormattedNewName
+            end;
+        true ->
+            FormattedNewName
+    end.
+
+-spec strip_name(Name :: binary()) -> binary().
+strip_name(Name) when byte_size(Name) > 0 ->
+    case is_name_quoted(Name) of
+        true ->
+            StrippedName = binary:part(Name, 1, byte_size(Name) - 2),
+            strip_name(StrippedName);
+        false ->
+            Name
+    end;
+strip_name(Name) ->
+    Name.
+
+-spec is_name_quoted(Name :: binary()) -> boolean().
+is_name_quoted(Name) ->
+    binary:first(Name) =:= $' andalso binary:last(Name) =:= $'.
 
 -spec format_result(NewName :: binary(),
                     EditItems :: [edit_item()],

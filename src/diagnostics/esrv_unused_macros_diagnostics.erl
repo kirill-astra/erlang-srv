@@ -1,7 +1,7 @@
 -module(esrv_unused_macros_diagnostics).
 
 %% API
--export([run/4]).
+-export([run/3]).
 
 -behaviour(esrv_diagnostics).
 
@@ -14,9 +14,19 @@
 -record(macro_info, {location :: location(),
                      used :: boolean()}).
 
--spec run(Uri :: uri(), AppPath :: path(), ModuleType :: module_type(), Options :: map()) ->
-          [diagnostic()].
-run(Uri, _, proj, Options) ->
+-spec run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+run(_, undefined, _) ->
+    [];
+run(Uri, AppId, Options) ->
+    case esrv_lib:get_app_type(AppId) of
+        {ok, AppType} when AppType =:= proj orelse AppType =:= sub_proj ->
+            do_run(Uri, Options);
+        _ ->
+            []
+    end.
+
+-spec do_run(Uri :: uri(), Options :: map()) -> [diagnostic()].
+do_run(Uri, Options) ->
     {ModuleName, Pois} = get_uri_data(Uri),
     MacrosInfo =
         lists:foldl(fun(#poi{data = {macro, MacroId},
@@ -47,9 +57,7 @@ run(Uri, _, proj, Options) ->
                             end;
                        (_) ->
                             false
-                    end, maps:to_list(MacrosInfo));
-run(_, _, _, _) ->
-    [].
+                    end, maps:to_list(MacrosInfo)).
 
 -spec get_uri_data(Uri :: uri()) -> {module() | undefined, [poi()]}.
 get_uri_data(Uri) ->

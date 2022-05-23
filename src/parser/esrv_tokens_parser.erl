@@ -6,7 +6,7 @@
 -include("log.hrl").
 
 %% API
--export([parse/5]).
+-export([parse/4]).
 
 -type uri_location() :: {uri(), location()}.
 -type fetched_macro() :: {[macro_token()], uri_location() | undefined}.
@@ -24,8 +24,7 @@
                   disabled_from :: line() | undefined}).
 
 -record(state, {uri :: uri(),
-                app_path :: path(),
-                module_type :: module_type(),
+                app_id :: app_id() | undefined,
                 include_chain :: [uri()],
                 local_macros :: macros(),
                 per_uri_macros :: [{uri(), macros()}],
@@ -43,12 +42,11 @@
 %%% API
 %%%===================================================================
 -spec parse(Uri :: uri(),
-            AppPath :: path(),
-            ModuleType :: module_type(),
+            AppId :: app_id() | undefined,
             Data :: binary(),
             IncludeChain :: [uri()]) -> tokens_info().
-parse(Uri, AppPath, ModuleType, Data, IncludeChain) ->
-    StateData0 = init_data(Uri, AppPath, ModuleType, Data, IncludeChain),
+parse(Uri, AppId, Data, IncludeChain) ->
+    StateData0 = init_data(Uri, AppId, Data, IncludeChain),
     StateData1 = check_preprocessor(StateData0),
     StateData2 = check_pois(StateData1),
     StateData3 = check_tokens(StateData2),
@@ -88,11 +86,10 @@ check_preprocessor({Scanned0, State0}) ->
 %%% Init
 %%%-------------------------------------------------------------------
 -spec init_data(Uri :: uri(),
-                AppPath :: path(),
-                ModuleType :: module_type(),
+                AppId :: app_id() | undefined,
                 Data :: binary(),
                 IncludeChain :: [uri()]) -> state_data().
-init_data(Uri, AppPath, ModuleType, Data0, IncludeChain) ->
+init_data(Uri, AppId, Data0, IncludeChain) ->
     {try
          Text =
              case filename:extension(Uri) of
@@ -115,8 +112,7 @@ init_data(Uri, AppPath, ModuleType, Data0, IncludeChain) ->
              ""
      end,
      #state{uri = Uri,
-            app_path = AppPath,
-            module_type = ModuleType,
+            app_id = AppId,
             include_chain = [Uri | IncludeChain],
             local_macros = #{},
             per_uri_macros = [],
@@ -255,6 +251,10 @@ read_mu_args2([{')', _} = Token | T], TokensAcc0, [{'(', _} | InnerStack], Acc, 
 read_mu_args2([{'[', _} = Token | T], TokensAcc0, InnerStack, Acc, State) ->
     read_mu_args2(T, [Token | TokensAcc0], [Token | InnerStack], Acc, State);
 read_mu_args2([{']', _} = Token | T], TokensAcc0, [{'[', _} | InnerStack], Acc, State) ->
+    read_mu_args2(T, [Token | TokensAcc0], InnerStack, Acc, State);
+read_mu_args2([{'{', _} = Token | T], TokensAcc0, InnerStack, Acc, State) ->
+    read_mu_args2(T, [Token | TokensAcc0], [Token | InnerStack], Acc, State);
+read_mu_args2([{'}', _} = Token | T], TokensAcc0, [{'{', _} | InnerStack], Acc, State) ->
     read_mu_args2(T, [Token | TokensAcc0], InnerStack, Acc, State);
 read_mu_args2([{'<<', _} = Token | T], TokensAcc0, InnerStack, Acc, State) ->
     read_mu_args2(T, [Token | TokensAcc0], [Token | InnerStack], Acc, State);
@@ -695,12 +695,10 @@ check_include(Tokens, State) ->
 -spec get_included_uri(IncludeType :: include | include_lib,
                        Include :: string(),
                        State :: #state{}) -> {ok, uri()} | undefined.
-get_included_uri(IncludeType, Include, #state{uri = Uri,
-                                              app_path = AppPath,
-                                              module_type = ModuleType}) ->
+get_included_uri(IncludeType, Include, #state{uri = Uri, app_id = AppId}) ->
     if
         IncludeType =:= include ->
-            esrv_lib:find_included_uri(Uri, AppPath, ModuleType, Include);
+            esrv_lib:find_included_uri(Uri, AppId, Include);
         IncludeType =:= include_lib ->
             esrv_lib:find_included_lib_uri(Include)
     end.
@@ -755,13 +753,13 @@ get_module_data(Uri, IncludeChain) ->
         {ok, ModuleData} ->
             ModuleData;
         undefined ->
+            AppId = esrv_lib:get_app_id(Uri),
             Path = esrv_lib:uri_to_path(Uri),
             {ok, Content} = file:read_file(Path),
             Hash = crypto:hash(md5, Content),
-            {AppPath, ModuleType} = esrv_lib:app_path_and_module_type(Uri),
-            ParsedModuleData = esrv_parser:parse(Uri, AppPath, ModuleType, Content, IncludeChain),
+            ParsedModuleData = esrv_parser:parse(Uri, AppId, Content, IncludeChain),
             ok = esrv_db:write_parsed_module(Uri, Hash, ParsedModuleData),
-            ok = esrv_db:write_module_meta(Uri, Hash, ModuleType, ParsedModuleData),
+            ok = esrv_db:write_module_meta(Uri, Hash, AppId, ParsedModuleData),
             ParsedModuleData
     end.
 

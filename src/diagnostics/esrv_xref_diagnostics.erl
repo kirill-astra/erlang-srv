@@ -3,7 +3,7 @@
 -behaviour(esrv_diagnostics).
 
 %% API
--export([run/4]).
+-export([run/3]).
 
 -include("types.hrl").
 -include("records.hrl").
@@ -11,11 +11,19 @@
 
 -define(SOURCE, <<"xref">>).
 
--spec run(Uri :: uri(), AppPath :: path(), ModuleType :: module_type(), Options :: map()) ->
-          [diagnostic()].
-run(_, _, otp, _) ->
-    [];
-run(Uri, _, _, Options) ->
+-spec run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+run(Uri, undefined, Options) ->
+    do_run(Uri, Options);
+run(Uri, AppId, Options) ->
+    case esrv_lib:get_app_type(AppId) of
+        {ok, AppType} when AppType =:= proj orelse AppType =:= sub_proj ->
+            do_run(Uri, Options);
+        _ ->
+            []
+    end.
+
+-spec do_run(Uri :: uri(), Options :: map()) -> [diagnostic()].
+do_run(Uri, Options) ->
     case esrv_lib:get_module_data(Uri) of
         {ok, ModuleData} ->
             #module_data{types = Types, functions = Functions, zones = Zones} = ModuleData,
@@ -49,7 +57,8 @@ run(Uri, _, _, Options) ->
             TargetModuleName = get_target_module_name(Uri, ModuleData),
             lists:foreach(fun(ModuleName) when ModuleName =/= TargetModuleName ->
                                   case esrv_db:read_module_meta_by_name(ModuleName) of
-                                      [#module_meta{module_type = proj}] ->
+                                      [#module_meta{app_type = AppType}]
+                                        when AppType =:= proj orelse AppType =:= sub_proj ->
                                           esrv_diagnostics_srv:add_dependency(ModuleName, Uri);
                                       _ ->
                                           ok
@@ -124,9 +133,9 @@ local_function({Name, Arity}, {Line, _} = Location, Zones, Acc) ->
                       Location :: location(),
                       Options :: map(),
                       Acc :: [diagnostic()]) -> [diagnostic()].
-remote_function(erlang, {module_info, 0}, _, _, Acc) ->
+remote_function(_, {module_info, 0}, _, _, Acc) ->
     Acc;
-remote_function(erlang, {module_info, 1}, _, _, Acc) ->
+remote_function(_, {module_info, 1}, _, _, Acc) ->
     Acc;
 remote_function(ModuleName, {Name, Arity}, {Line, _}, Options, Acc) ->
     case esrv_req_lib:get_remote_function(ModuleName, {Name, Arity}) of

@@ -10,21 +10,26 @@
          file_to_uri/1,
          path_to_file/1,
          file_to_path/1,
-         patterns_to_dirs/1,
-         pattern_to_dirs/1,
-         dirs_to_files/1,
-         dirs_to_files/2,
-         dirs_to_files/3,
-         dir_to_files/1,
-         dir_to_files/2,
-         dir_to_files/3,
-         otp_path/0,
-         otp_path/1,
-         otp_app_paths/1,
-         deps_paths/1,
-         deps_app_paths/1,
-         flatten_path/1,
-         recursive_dirs/1,
+         get_target_paths/0,
+         get_proj_path/0,
+         get_sub_projs/0,
+         get_sub_proj_dirs/0,
+         get_deps/0,
+         get_dep_dirs/0,
+         get_otp_path/0,
+         get_app_dirs/1,
+         get_include_dirs/1,
+         get_include_dirs/2,
+         scan_files/2,
+         scan_files/3,
+         scan_deep_files/2,
+         scan_deep_files/3,
+         scan_dirs/1,
+         scan_dirs/2,
+         scan_deep_dirs/1,
+         scan_deep_dirs/2,
+         scan_file_system/2,
+         ensure_absolute_path/2,
          rm_rf/1]).
 
 %% LSP utils
@@ -34,23 +39,27 @@
          format_range/2]).
 
 %% Parsed data utils
--export([get_module_data/1,
+-export([get_app_id/1,
+         get_app_type/1,
+         get_app_path/1,
+         get_app_type_and_path/1,
+         find_included_uri/3,
+         find_included_lib_uri/1,
+         get_module_data/1,
          get_current_content/1,
          fetch_text_document_lines/3,
          fetch_text_document_form/2,
-         find_included_uri/2,
-         find_included_uri/4,
-         find_included_lib_uri/1,
-         app_path_and_module_type/1,
          get_escript_src/1]).
 
 %% Misc
 -export([hash/1,
-         includes/2,
+         includes/1,
          defines/0,
          parse_term/2,
          is_binary_prefix/2,
          substitute_group_leader/1,
+         get_distr_mode/0,
+         append_release_and_distr_mode/1,
          gentle_exit/1]).
 
 -include_lib("kernel/include/file.hrl").
@@ -60,7 +69,6 @@
 -include("parser.hrl").
 
 -define(BDIR_PREFIX, <<"erlang_srv">>).
--define(EXTENSIONS, [<<".erl">>, <<".hrl">>, <<".escript">>]).
 
 %%%===================================================================
 %%% File system related utils
@@ -120,148 +128,267 @@ path_to_file(File) ->
 file_to_path(File) ->
     list_to_binary(File).
 
--spec patterns_to_dirs(Patterns :: [pattern()]) -> [path()].
-patterns_to_dirs(Patterns) ->
-    lists:foldl(fun(Pattern, Acc) ->
-                        pattern_to_dirs(Pattern, Acc)
-                end, [], Patterns).
+-spec get_target_paths() -> [path()].
+get_target_paths() ->
+    lists:flatten([get_proj_path(),
+                   get_sub_projs(),
+                   get_sub_proj_dirs(),
+                   get_deps(),
+                   get_dep_dirs(),
+                   get_otp_path()]).
 
--spec pattern_to_dirs(Pattern :: pattern()) -> [path()].
-pattern_to_dirs(Pattern) ->
-    pattern_to_dirs(Pattern, []).
+-spec get_proj_path() -> path().
+get_proj_path() ->
+    esrv_config:fetch_value(proj_path).
 
--spec pattern_to_dirs(Pattern :: pattern(), Acc :: [path()]) -> [path()].
-pattern_to_dirs(Pattern, Acc0) ->
-    lists:foldl(fun(Candidate, Acc00) ->
-                        case file:read_link_info(Candidate) of
-                            {ok, #file_info{type = directory}} ->
-                                [Candidate | Acc00];
-                            _ ->
-                                Acc00
-                        end
-                end, Acc0, wildcard_paths(Pattern)).
+-spec get_sub_projs() -> [path()].
+get_sub_projs() ->
+    {ok, ProjPath} = esrv_config:get_value(proj_path),
+    SubProjs = esrv_config:get_value(sub_projs, []),
+    ensure_absolute_paths(ProjPath, SubProjs).
 
--spec dirs_to_files(Dirs :: [path()]) -> [path()].
-dirs_to_files(Dirs) ->
-    dirs_to_files(Dirs, []).
+-spec get_sub_proj_dirs() -> [path()].
+get_sub_proj_dirs() ->
+    {ok, ProjPath} = esrv_config:get_value(proj_path),
+    SubProjDirs = esrv_config:get_value(sub_proj_dirs, []),
+    ensure_absolute_paths(ProjPath, SubProjDirs).
 
--spec dirs_to_files(Dirs :: [path()], SkipDirs :: [path()]) -> [path()].
-dirs_to_files(Dirs, SkipDirs) ->
-    dirs_to_files(Dirs, SkipDirs, ?EXTENSIONS).
+-spec get_deps() -> [path()].
+get_deps() ->
+    {ok, ProjPath} = esrv_config:get_value(proj_path),
+    Deps = esrv_config:get_value(deps, []),
+    ensure_absolute_paths(ProjPath, Deps).
 
--spec dirs_to_files(Dirs :: [path()], SkipDirs :: [path()], Extensions :: [binary()]) -> [path()].
-dirs_to_files(Dirs, SkipDirs, Extensions) ->
-    lists:foldl(fun(Dir, Acc) ->
-                        dir_to_files(Dir, SkipDirs, Extensions, Acc)
-                end, [], Dirs).
+-spec get_dep_dirs() -> [path()].
+get_dep_dirs() ->
+    {ok, ProjPath} = esrv_config:get_value(proj_path),
+    DepDirs = esrv_config:get_value(dep_dirs, []),
+    ensure_absolute_paths(ProjPath, DepDirs).
 
--spec dir_to_files(Dir :: path()) -> [path()].
-dir_to_files(Dir) ->
-    dir_to_files(Dir, []).
-
--spec dir_to_files(Dir :: path(), SkipDirs :: [path()]) -> [path()].
-dir_to_files(Dir, SkipDirs) ->
-    dir_to_files(Dir, SkipDirs, ?EXTENSIONS).
-
--spec dir_to_files(Dir :: path(), SkipDirs :: [path()], Extensions :: [binary()]) -> [path()].
-dir_to_files(Dir, SkipDirs, Extensions) ->
-    dir_to_files(Dir, SkipDirs, Extensions, []).
-
--spec dir_to_files(Dir :: path(),
-                   SkipDirs :: [path()],
-                   Extensions :: [binary()],
-                   Acc :: [path()]) -> [path()].
-dir_to_files(Dir, SkipDirs, Extensions, Acc0) ->
-    lists:foldl(fun(Candidate, Acc00) ->
-                        case file:read_link_info(Candidate) of
-                            {ok, #file_info{type = directory}} ->
-                                case lists:member(Candidate, SkipDirs) of
-                                    false ->
-                                        dir_to_files(Candidate, SkipDirs, Extensions, Acc00);
-                                    true ->
-                                        Acc00
-                                end;
-                            {ok, #file_info{type = regular}} ->
-                                Extension = filename:extension(Candidate),
-                                case lists:member(Extension, Extensions) of
-                                    true ->
-                                        [Candidate | Acc00];
-                                    false ->
-                                        Acc00
-                                end;
-                            _ ->
-                                Acc00
-                        end
-                end, Acc0, wildcard_paths([Dir, "*"])).
-
--spec otp_path() -> path().
-otp_path() ->
+-spec get_otp_path() -> path().
+get_otp_path() ->
     RootDir = code:root_dir(),
     list_to_binary(RootDir).
 
--spec otp_path(ProjPath :: path()) -> path().
-otp_path(ProjPath) ->
-    OtpPath = otp_path(),
-    absolute_path(ProjPath, OtpPath).
+-spec get_app_dirs(Base :: path()) -> [path()].
+get_app_dirs(Base) ->
+    lists:map(fun(AppsDir) ->
+                      ensure_absolute_path(Base, AppsDir)
+              end, esrv_config:fetch_value(apps_dirs)).
 
--spec otp_app_paths(ProjPath :: path()) -> [path()].
-otp_app_paths(ProjPath) ->
-    OtpPath = otp_path(ProjPath),
-    lists:filter(fun(AppPath) ->
-                         lists:all(fun(Exclude) ->
-                                           RegExp = filename:join([OtpPath, "lib", Exclude]),
-                                           re:run(AppPath, RegExp) =:= nomatch
-                                   end, esrv_config:get_value(otp_apps_exclude, []))
-                 end, pattern_to_dirs([OtpPath, <<"lib">>, "*"])).
+-spec get_include_dirs(Base :: path()) -> [path()].
+get_include_dirs(Base) ->
+    lists:map(fun(IncludeDir) ->
+                      ensure_absolute_path(Base, IncludeDir)
+              end, esrv_config:fetch_value(include_dirs)).
 
--spec deps_paths(ProjPath :: path()) -> [path()].
-deps_paths(ProjPath) ->
-    DepsPaths0 =
-        lists:foldr(fun(DepsDir, Acc) ->
-                            DepsPath = absolute_path(ProjPath, DepsDir),
-                            case filelib:is_dir(DepsPath) of
-                                true ->
-                                    [esrv_lib:flatten_path(DepsPath) | Acc];
-                                false ->
-                                    Acc
-                            end
-                    end, [], esrv_config:get_value(deps_dirs, [])),
-    lists:filter(fun filelib:is_dir/1, DepsPaths0).
+-spec get_include_dirs(AppType :: app_type(), AppPath :: path()) -> [path()].
+get_include_dirs(AppType, AppPath) ->
+    case AppType of
+        otp ->
+            scan_deep_dirs(AppPath);
+        deps ->
+            scan_deep_dirs(AppPath);
+        sub_proj ->
+            get_include_dirs(AppPath);
+        proj ->
+            get_include_dirs(AppPath)
+    end.
 
--spec deps_app_paths(ProjPath :: path()) -> [path()].
-deps_app_paths(ProjPath) ->
-    DepsPaths = deps_paths(ProjPath),
-    ProjName = filename:basename(ProjPath),
-    deps_app_paths(DepsPaths, [binary_to_list(ProjName)], [], []).
+-spec scan_files(Pattern :: scan_fs_pattern(), Extensions :: [binary()]) -> [path()].
+scan_files(Pattern, Extensions) ->
+    scan_files(Pattern, Extensions, []).
 
--spec deps_app_paths(DepsPaths :: [path()],
-                     Exclude :: [string()],
-                     Acc :: [path()],
-                     Uniq :: [binary()]) -> [path()].
-deps_app_paths([], _, Acc, _) ->
-    Acc;
-deps_app_paths([DepsPath | T], Exclude, Acc0, Uniq0) ->
-    {ok, Deps} = file:list_dir(DepsPath),
-    {Acc1, Uniq1} =
-        lists:foldl(fun(Dep, {Acc00, Uniq00}) ->
-                            DepPath = filename:join(DepsPath, Dep),
-                            case lists:member(Dep, Uniq00) of
-                                false ->
-                                    {[DepPath | Acc00], [Dep | Uniq00]};
-                                true ->
-                                    {Acc00, Uniq00}
-                            end
-                    end, {Acc0, Uniq0}, Deps -- Exclude),
-    deps_app_paths(T, Exclude, Acc1, Uniq1).
+-spec scan_files(Pattern :: scan_fs_pattern(),
+                 Extensions :: [binary()],
+                 ToSkip :: [path()]) -> [path()].
+scan_files(Pattern, Extensions, ToSkip) ->
+    scan_file_system(Pattern, #{filter => file,
+                                recursive => false,
+                                to_skip => ToSkip,
+                                extensions => Extensions}).
 
--spec absolute_path(ProjPath :: path(), Path :: path()) -> path().
-absolute_path(ProjPath, Path0) ->
+-spec scan_deep_files(Pattern :: scan_fs_pattern(), Extensions :: [binary()]) -> [path()].
+scan_deep_files(Pattern, Extensions) ->
+    scan_deep_files(Pattern, Extensions, []).
+
+-spec scan_deep_files(Pattern :: scan_fs_pattern(),
+                      Extensions :: [binary()],
+                      ToSkip :: [path()]) -> [path()].
+scan_deep_files(Pattern, Extensions, ToSkip) ->
+    scan_file_system(Pattern, #{filter => file,
+                                recursive => true,
+                                to_skip => ToSkip,
+                                extensions => Extensions}).
+
+-spec scan_dirs(Pattern :: scan_fs_pattern()) -> [path()].
+scan_dirs(Pattern) ->
+    scan_dirs(Pattern, []).
+
+-spec scan_dirs(Pattern :: scan_fs_pattern(), ToSkip :: [path()]) -> [path()].
+scan_dirs(Pattern, ToSkip) ->
+    scan_file_system(Pattern, #{filter => dir, recursive => false, to_skip => ToSkip}).
+
+-spec scan_deep_dirs(Pattern :: scan_fs_pattern()) -> [path()].
+scan_deep_dirs(Pattern) ->
+    scan_deep_dirs(Pattern, []).
+
+-spec scan_deep_dirs(Pattern :: scan_fs_pattern(), ToSkip :: [path()]) -> [path()].
+scan_deep_dirs(Pattern, ToSkip) ->
+    scan_file_system(Pattern, #{filter => dir, recursive => true, to_skip => ToSkip}).
+
+-spec scan_file_system(Pattern :: scan_fs_pattern(), Options :: scan_fs_options()) ->
+          [path()].
+scan_file_system(Pattern, Options) ->
+    {_, Paths} = scan_file_system(Pattern, Options, [], []),
+    lists:reverse(Paths).
+
+-spec scan_file_system(Pattern :: scan_fs_pattern(),
+                       Options :: scan_fs_options(),
+                       ChainAcc :: [path()],
+                       PathsAcc :: [path()]) -> {[path()], [path()]}.
+scan_file_system(Pattern, Options, ChainAcc0, PathsAcc0) ->
+    lists:foldl(fun(Path, {ChainAcc00, PathsAcc00}) ->
+                        scan_path(Path, Options, ChainAcc00, PathsAcc00)
+                end, {ChainAcc0, PathsAcc0}, resolve_pattern(Pattern)).
+
+-spec resolve_pattern(Pattern :: scan_fs_pattern()) -> [path()].
+resolve_pattern(Pattern0) when is_list(Pattern0) ->
+    case lists:all(fun is_integer/1, Pattern0) of
+        true ->
+            Pattern1 = unicode:characters_to_binary(Pattern0),
+            resolve_pattern(Pattern1);
+        false ->
+            Pattern1 = filename:join(Pattern0),
+            resolve_pattern(Pattern1)
+    end;
+resolve_pattern(Pattern0) when is_binary(Pattern0) ->
+    Pattern1 = binary_to_list(Pattern0),
+    FileNames = filelib:wildcard(Pattern1),
+    lists:map(fun file_to_path/1, FileNames).
+
+-spec scan_path(Path :: path(),
+                Options :: scan_fs_options(),
+                ChainAcc :: [path()],
+                PathsAcc :: [path()]) -> {[path()], [path()]}.
+scan_path(Path, Options, ChainAcc0, PathsAcc0) ->
+    case resolve_link(Path, [Path]) of
+        {ok, _, #file_info{type = regular}} ->
+            {ChainAcc0, maybe_add_file(Path, Options, PathsAcc0)};
+        {ok, ResolvedPath, #file_info{type = directory}} ->
+            maybe_add_dir(Path, ResolvedPath, Options, ChainAcc0, PathsAcc0);
+        _ ->
+            {ChainAcc0, PathsAcc0}
+    end.
+
+-spec resolve_link(Path :: path(), Chain :: [path()]) -> {ok, path(), file:file_info()} | undefined.
+resolve_link(Path, Chain0) ->
+    case file:read_link_info(Path) of
+        {ok, #file_info{type = Type} = FileInfo}
+          when Type =:= regular orelse Type =:= directory ->
+            {ok, Path, FileInfo};
+        {ok, #file_info{type = symlink}} ->
+            {ok, LinkFileName} = file:read_link(Path),
+            LinkPath0 = file_to_path(LinkFileName),
+            Base = filename:dirname(Path),
+            LinkPath1 = ensure_absolute_path(Base, LinkPath0),
+            case lists:member(LinkPath1, Chain0) of
+                false ->
+                    Chain1 = [LinkPath1 | Chain0],
+                    resolve_link(LinkPath1, Chain1);
+                true ->
+                    undefined
+            end;
+        _ ->
+            undefined
+    end.
+
+-spec maybe_add_file(Path :: path(),
+                     Options :: scan_fs_options(),
+                     PathsAcc :: [path()]) -> [path()].
+maybe_add_file(Path, Options, PathsAcc) ->
+    case maps:get(filter, Options, both) of
+        Filter when Filter =:= file orelse Filter =:= both ->
+            case maps:find(extensions, Options) of
+                {ok, Extensions} ->
+                    Extension = filename:extension(Path),
+                    case lists:member(Extension, Extensions) of
+                        true ->
+                            maybe_add(Path, Options, PathsAcc);
+                        false ->
+                            PathsAcc
+                    end;
+                error ->
+                    maybe_add(Path, Options, PathsAcc)
+            end;
+        _ ->
+            PathsAcc
+    end.
+
+-spec maybe_add_dir(Path :: path(),
+                    ResolvedPath :: path(),
+                    Options :: scan_fs_options(),
+                    ChainAcc :: [path()],
+                    PathsAcc :: [path()]) -> {[path()], [path()]}.
+maybe_add_dir(Path, ResolvedPath, Options, ChainAcc0, PathsAcc0) ->
+    case lists:member(ResolvedPath, ChainAcc0) of
+        false ->
+            PathsAcc1 =
+                case maps:get(filter, Options, both) of
+                    Filter when Filter =:= dir orelse Filter =:= both ->
+                        maybe_add(Path, Options, PathsAcc0);
+                    _ ->
+                        PathsAcc0
+                end,
+            maybe_recursive(Path, ResolvedPath, Options, ChainAcc0, PathsAcc1);
+        true ->
+            {ChainAcc0, PathsAcc0}
+    end.
+
+-spec maybe_add(Path :: path(),
+                Options :: scan_fs_options(),
+                PathsAcc :: [path()]) -> [path()].
+maybe_add(Path, Options, PathsAcc) ->
+    ToSkip = maps:get(to_skip, Options, []),
+    case lists:member(Path, ToSkip) of
+        false ->
+            [Path | PathsAcc];
+        true ->
+            PathsAcc
+    end.
+
+-spec maybe_recursive(Path :: path(),
+                      ResolvedPath :: path(),
+                      Options :: scan_fs_options(),
+                      ChainAcc :: [path()],
+                      PathsAcc :: [path()]) -> {[path()], [path()]}.
+maybe_recursive(Path, ResolvedPath, Options, ChainAcc0, PathsAcc0) ->
+    case maps:get(recursive, Options, false) of
+        true ->
+            ToSkip = maps:get(to_skip, Options, []),
+            case lists:member(Path, ToSkip) of
+                false ->
+                    ChainAcc1 = [ResolvedPath | ChainAcc0],
+                    scan_file_system([Path, <<"*">>], Options, ChainAcc1, PathsAcc0);
+                true ->
+                    {ChainAcc0, PathsAcc0}
+            end;
+        false ->
+            {ChainAcc0, PathsAcc0}
+    end.
+
+-spec ensure_absolute_paths(Base :: path(), Paths :: [path()]) -> [path()].
+ensure_absolute_paths(Base, Paths) ->
+    [ ensure_absolute_path(Base, Path) || Path <- Paths ].
+
+-spec ensure_absolute_path(Base :: path(), Path :: path()) -> path().
+ensure_absolute_path(Base, Path0) ->
     Path1 =
-        case Path0 of
-            <<"/", _/binary>> ->
+        case re:run(Path0, "^([a-zA-z]:)?/") of
+            {match, _} ->
                 Path0;
-            _ ->
-                filename:join(ProjPath, Path0)
+            nomatch ->
+                filename:join(Base, Path0)
         end,
     flatten_path(Path1).
 
@@ -281,44 +408,17 @@ flatten_path([<<"..">> | T], Acc) ->
 flatten_path([Element | T], Acc) ->
     flatten_path(T, [Element | Acc]).
 
--spec recursive_dirs(Dir :: path()) -> [path()].
-recursive_dirs(Dir) ->
-    recursive_dirs(Dir, []).
-
--spec recursive_dirs(Dir :: path(), Acc :: [path()]) -> [path()].
-recursive_dirs(Dir, Acc0) ->
-    lists:foldl(fun(Candidate, Acc00) ->
-                        case file:read_link_info(Candidate) of
-                            {ok, #file_info{type = directory}} ->
-                                [Candidate | recursive_dirs(Candidate, Acc00)];
-                            _ ->
-                                Acc00
-                        end
-                end, Acc0, wildcard_paths([Dir, "*"])).
-
 -spec rm_rf(Target :: file:filename_all()) -> ok.
 rm_rf(Target) ->
     case file:read_link_info(Target) of
         {ok, #file_info{type = directory}} ->
-            lists:foreach(fun rm_rf/1, wildcard_paths([Target, "*"])),
+            lists:foreach(fun rm_rf/1, scan_file_system([Target, <<"*">>], #{recursive => false})),
             ok = file:del_dir(Target);
         {ok, #file_info{type = Type}} when Type =:= regular orelse Type =:= symlink ->
             ok = file:delete(Target);
         _ ->
             ok
     end.
-
--spec wildcard_paths(Pattern :: pattern()) -> [path()].
-wildcard_paths(Pattern) ->
-    Wildcard =
-        case filename:join(Pattern) of
-            Joined when is_binary(Joined) ->
-                binary_to_list(Joined);
-            Joined ->
-                Joined
-        end,
-    Filenames = filelib:wildcard(Wildcard),
-    lists:map(fun file_to_path/1, Filenames).
 
 %%%===================================================================
 %%% LSP utils
@@ -357,6 +457,122 @@ format_range({StartLine, StartColumn}, {EndLine, EndColumn}) ->
 %%%===================================================================
 %%% Parsed data utils
 %%%===================================================================
+-spec get_app_id(Uri :: uri()) -> app_id() | undefined.
+get_app_id(Uri) ->
+    case esrv_db:read_module_meta(Uri) of
+        [#module_meta{app_id = AppId}] ->
+            AppId;
+        [] ->
+            discover_app_id(Uri)
+    end.
+
+-spec discover_app_id(TargetUri :: uri()) -> app_id() | undefined.
+discover_app_id(TargetUri) ->
+    TargetPath = uri_to_path(TargetUri),
+    Candidates =
+        lists:foldl(fun(AppType, Acc) ->
+                            discover_app_id(TargetPath, AppType, Acc)
+                    end, [], [otp, deps, sub_proj, proj]),
+    case Candidates of
+        [_|_] ->
+            {AppId, _} =
+                lists:foldl(fun(#scanned_app{id = AppId, path = Path}, {_, MaxLength})
+                                  when byte_size(Path) > MaxLength ->
+                                    {AppId, byte_size(Path)};
+                               (_, Acc) ->
+                                    Acc
+                            end, {undefined, 0}, Candidates),
+            AppId;
+        [] ->
+            undefined
+    end.
+
+-spec discover_app_id(TargetPath :: uri(), AppType :: app_type(), Acc :: [scanned_app()]) ->
+          [scanned_app()].
+discover_app_id(TargetPath, AppType, Acc0) ->
+    lists:foldl(fun(#scanned_app{path = Path} = ScannedApp, Acc00) ->
+                          case is_binary_prefix(Path, TargetPath) of
+                              true ->
+                                  [ScannedApp | Acc00];
+                              false ->
+                                  Acc00
+                          end
+                  end, Acc0, esrv_db:read_scanned_app_by_type(AppType)).
+
+-spec get_app_type(AppId :: app_id()) -> {ok, app_type()} | undefined.
+get_app_type(AppId) ->
+    case esrv_db:read_scanned_app(AppId) of
+        [#scanned_app{type = Type}] ->
+            {ok, Type};
+        [] ->
+            undefined
+    end.
+
+-spec get_app_path(AppId :: app_id()) -> {ok, path()} | undefined.
+get_app_path(AppId) ->
+    case esrv_db:read_scanned_app(AppId) of
+        [#scanned_app{path = Path}] ->
+            {ok, Path};
+        [] ->
+            undefined
+    end.
+
+-spec get_app_type_and_path(AppId :: app_id()) -> {ok, app_type(), path()} | undefined.
+get_app_type_and_path(AppId) ->
+    case esrv_db:read_scanned_app(AppId) of
+        [#scanned_app{type = Type, path = Path}] ->
+            {ok, Type, Path};
+        [] ->
+            undefined
+    end.
+
+-spec find_included_uri(Uri :: uri(),
+                        AppId :: app_id() | undefined,
+                        Include :: string()) -> {ok, uri()} | undefined.
+find_included_uri(Uri, undefined, Include) ->
+    Path = esrv_lib:uri_to_path(Uri),
+    IncluderDir = filename:dirname(Path),
+    do_find_included_uri([IncluderDir], Include);
+find_included_uri(Uri, AppId, Include) ->
+    {ok, AppType, AppPath} = get_app_type_and_path(AppId),
+    Path = esrv_lib:uri_to_path(Uri),
+    IncluderDir = filename:dirname(Path),
+    IncludeDirs = get_include_dirs(AppType, AppPath),
+    do_find_included_uri([IncluderDir | IncludeDirs], Include).
+
+-spec do_find_included_uri(IncludeDirs :: [path()], Include :: string()) -> {ok, uri()} | undefined.
+do_find_included_uri([], _) ->
+    undefined;
+do_find_included_uri([IncludeDir | T], Include) ->
+    Path = filename:join(IncludeDir, Include),
+    case filelib:is_regular(Path) of
+        true ->
+            {ok, path_to_uri(flatten_path(Path))};
+        false ->
+            do_find_included_uri(T, Include)
+    end.
+
+-spec find_included_lib_uri(IncludeLib :: string()) -> {ok, uri()} | undefined.
+find_included_lib_uri(IncludeLib) ->
+    case filename:split(IncludeLib) of
+        [AppName | T] ->
+            AppId = list_to_atom(AppName),
+            case esrv_db:read_scanned_app(AppId) of
+                [#scanned_app{path = AppPath}] ->
+                    Path = filename:join([AppPath | T]),
+                    case filelib:is_regular(Path) of
+                        true ->
+                            {ok, path_to_uri(Path)};
+                        false ->
+                            undefined
+                    end;
+                [] ->
+                    undefined
+            end;
+        [] ->
+            undefined
+    end.
+
 -spec get_module_data(Uri :: uri()) -> {ok, module_data()} | undefined.
 get_module_data(Uri) ->
     case esrv_index_mgr:get_current_module_data(Uri) of
@@ -417,92 +633,6 @@ take_lines(Content0, LinesLeft) ->
             [Line]
     end.
 
--spec find_included_uri(Uri :: uri(), Include :: string()) -> {ok, uri()} | undefined.
-find_included_uri(Uri, Include) ->
-    {AppPath, ModuleType} = app_path_and_module_type(Uri),
-    find_included_uri(Uri, AppPath, ModuleType, Include).
-
--spec find_included_uri(Uri :: uri(),
-                        AppPath :: path(),
-                        ModuleType :: module_type(),
-                        Include :: string()) -> {ok, uri()} | undefined.
-find_included_uri(Uri, ProjPath, proj, Include) ->
-    Path = esrv_lib:uri_to_path(Uri),
-    IncluderDir = filename:dirname(Path),
-    {ok, IncludeDirs} = esrv_config:get_value(include_dirs),
-    Candidates0 =
-        lists:map(fun(IncludeDir) ->
-                          filename:join([ProjPath, IncludeDir, Include])
-                  end, IncludeDirs),
-    Candidates1 = [filename:join(IncluderDir, Include) | Candidates0],
-    do_find_included_uri(Candidates1);
-find_included_uri(_, AppPath, _, Include) ->
-    Candidates =
-        lists:map(fun(IncludeDir) ->
-                          filename:join([IncludeDir, Include])
-                  end, recursive_dirs(AppPath)),
-    do_find_included_uri(Candidates).
-
--spec do_find_included_uri(Paths :: [path()]) -> {ok, uri()} | undefined.
-do_find_included_uri([]) ->
-    undefined;
-do_find_included_uri([Path0 | T]) ->
-    case filelib:is_regular(Path0) of
-        true ->
-            Path1 = flatten_path(Path0),
-            {ok, path_to_uri(Path1)};
-        false ->
-            do_find_included_uri(T)
-    end.
-
--spec find_included_lib_uri(IncludeLib :: string()) -> {ok, uri()} | undefined.
-find_included_lib_uri(IncludeLib) ->
-    {ok, ProjPath} = esrv_config:get_value(proj_path),
-    case filename:split(IncludeLib) of
-        [App | T] ->
-            OtpPattern = [otp_path(ProjPath), <<"lib">>, App ++ "-*" | T],
-            DepsPatterns = lists:map(fun(DepsPath) ->
-                                             [DepsPath, App | T]
-                                     end, deps_paths(ProjPath)),
-            do_find_included_lib_uri([OtpPattern | DepsPatterns]);
-        [] ->
-            undefined
-    end.
-
--spec do_find_included_lib_uri(Patterns :: [pattern()]) -> {ok, uri()} | undefined.
-do_find_included_lib_uri([]) ->
-    undefined;
-do_find_included_lib_uri([Pattern | T]) ->
-    case wildcard_paths(Pattern) of
-        [Path | _] ->
-            {ok, path_to_uri(Path)};
-        [] ->
-            do_find_included_lib_uri(T)
-    end.
-
--spec app_path_and_module_type(TargetUri :: uri()) -> {path(), module_type()}.
-app_path_and_module_type(TargetUri) ->
-    TargetPath = uri_to_path(TargetUri),
-    {ok, ProjPath} = esrv_config:get_value(proj_path),
-    case esrv_db:read_module_meta(TargetUri) of
-        [#module_meta{module_type = proj}] ->
-            {ProjPath, proj};
-        _ ->
-            AppPathsInfo =
-                [ {deps, AppPath} || AppPath <- deps_app_paths(ProjPath) ] ++
-                [ {otp, AppPath} || AppPath <- otp_app_paths(ProjPath) ],
-            lists:foldl(fun({ModuleType, AppPath}, Acc) when Acc =:= {ProjPath, proj} ->
-                                case is_binary_prefix(AppPath, TargetPath) of
-                                    true ->
-                                        {AppPath, ModuleType};
-                                    false ->
-                                        Acc
-                                end;
-                           (_, Acc) ->
-                                Acc
-                        end, {ProjPath, proj}, AppPathsInfo)
-    end.
-
 -spec get_escript_src(Data :: binary()) -> {ok, binary()} | no_escript | no_source.
 get_escript_src(<<"#!", _/binary>> = Data0) ->
     Data1 = remove_escript_first_line(Data0),
@@ -555,19 +685,21 @@ skip_new_lines(Data) ->
 hash(Content) ->
     crypto:hash(md5, Content).
 
--spec includes(AppPath :: path(), ModuleType :: module_type()) -> [file:filename()].
-includes(AppPath, ModuleType) ->
-    {ok, ProjPath} = esrv_config:get_value(proj_path),
+-spec includes(AppId :: app_id() | undefined) -> [file:filename()].
+includes(AppId) ->
     Paths =
-        case ModuleType of
-            proj ->
-                lists:foldl(fun(IncludeDir, Acc) ->
-                                    wildcard_paths([AppPath, IncludeDir]) ++ Acc
-                            end, [], esrv_config:get_value(include_dirs, []));
-            _ ->
-                recursive_dirs(AppPath)
+        case AppId of
+            AppId when AppId =/= undefined ->
+                case get_app_type_and_path(AppId) of
+                    {ok, AppType, AppPath} ->
+                        get_include_dirs(AppType, AppPath);
+                    undefined ->
+                        []
+                end;
+            undefined ->
+                []
         end,
-    [ path_to_file(Path) || Path <- Paths ++ deps_paths(ProjPath) ].
+    [ path_to_file(Path) || Path <- Paths ++ get_sub_proj_dirs() ++ get_dep_dirs() ].
 
 -spec defines() -> [{atom(), any()}].
 defines() ->
@@ -621,6 +753,26 @@ substitute_group_leader(Fun) ->
             Result;
         {'DOWN', MonRef, process, Executor, Reason} ->
             erlang:error(Reason)
+    end.
+
+-spec get_distr_mode() -> distr_mode().
+get_distr_mode() ->
+    {ok, DistrMode} = esrv_config:get_value(distr_mode),
+    if
+        DistrMode =:= <<"shortnames">> orelse DistrMode =:= <<"longnames">> ->
+            binary_to_atom(DistrMode, utf8);
+        true ->
+            shortnames
+    end.
+
+-spec append_release_and_distr_mode(Value :: string()) -> string().
+append_release_and_distr_mode(Value) ->
+    OptRelease = erlang:system_info(otp_release),
+    case get_distr_mode() of
+        longnames ->
+            Value ++ "_" ++ OptRelease ++ "_long";
+        shortnames ->
+            Value ++ "_" ++ OptRelease ++ "_short"
     end.
 
 -spec gentle_exit(Code :: integer()) -> no_return().

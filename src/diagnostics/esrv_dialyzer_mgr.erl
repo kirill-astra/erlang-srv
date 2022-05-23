@@ -3,6 +3,7 @@
 -behaviour(gen_statem).
 
 -include("types.hrl").
+-include("records.hrl").
 -include("log.hrl").
 
 %% API
@@ -226,16 +227,9 @@ otp_plt_name() ->
 
 -spec otp_app_names() -> [binary()].
 otp_app_names() ->
-    {ok, ProjPath} = esrv_config:get_value(proj_path),
-    OtpPath = esrv_lib:otp_path(ProjPath),
-    lists:filtermap(fun(Dir) ->
-                            case re:run(Dir, ".*/(.*)-", [{capture, all_but_first, binary}]) of
-                                {match, [AppName]} ->
-                                    {true, AppName};
-                                nomatch ->
-                                    false
-                            end
-                    end, esrv_lib:pattern_to_dirs([OtpPath, <<"lib">>, "*"])).
+    lists:map(fun(#scanned_app{id = Id}) ->
+                      atom_to_binary(Id, utf8)
+              end, esrv_db:read_scanned_app_by_type(otp)).
 
 -spec deps_plt_check() -> any().
 deps_plt_check() ->
@@ -296,17 +290,22 @@ deps_plt_sync_data(PltPaths) ->
 
 -spec deps_plt_paths() -> [{binary(), path()}].
 deps_plt_paths() ->
-    {ok, ProjPath} = esrv_config:get_value(proj_path),
     PltPaths =
         lists:foldl(fun(DepsAppPath, Acc0) ->
                             filelib:fold_files(DepsAppPath, "\.beam", true,
                                                fun(File, Acc00) ->
                                                        [{filename:basename(File), File} | Acc00]
                                                end, Acc0)
-                    end, [], esrv_lib:deps_app_paths(ProjPath)),
+                    end, [], deps_app_paths()),
     lists:ukeysort(1, PltPaths).
 
--spec deps_plt_path() -> binary().
+-spec deps_app_paths() -> [path()].
+deps_app_paths() ->
+    lists:map(fun(#scanned_app{path = Path}) ->
+                      Path
+              end, esrv_db:read_scanned_app_by_type(deps)).
+
+-spec deps_plt_path() -> path().
 deps_plt_path() ->
     {ok, CurrentDir} = file:get_cwd(),
     CurrentDirName = filename:basename(CurrentDir),

@@ -2,7 +2,7 @@
 
 %% API
 -export([init/1,
-         run/4]).
+         run/3]).
 
 -behaviour(esrv_diagnostics).
 
@@ -19,9 +19,19 @@ init(Options) ->
     {ok, _} = esrv_dynamic_sup:start_child(ChildSpec),
     Options.
 
--spec run(Uri :: uri(), AppPath :: path(), ModuleType :: module_type(), Options :: map()) ->
-          [diagnostic()].
-run(Uri, ProjPath, proj, Options) ->
+-spec run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+run(_, undefined, _) ->
+    [];
+run(Uri, AppId, Options) ->
+    case esrv_lib:get_app_type(AppId) of
+        {ok, AppType} when AppType =:= proj orelse AppType =:= sub_proj ->
+            do_run(Uri, AppId, Options);
+        _ ->
+            []
+    end.
+
+-spec do_run(Uri :: uri(), AppId :: app_id() | undefined, Options :: map()) -> [diagnostic()].
+do_run(Uri, AppId, Options) ->
     Filename = esrv_lib:uri_to_file(Uri),
     case filename:extension(Filename) of
         ".erl" ->
@@ -31,7 +41,7 @@ run(Uri, ProjPath, proj, Options) ->
                     Info =
                         [{files, lists:map(fun esrv_lib:uri_to_file/1, TargetUris)},
                          {from, src_code},
-                         {include_dirs, esrv_lib:includes(ProjPath, proj)},
+                         {include_dirs, esrv_lib:includes(AppId)},
                          {plts, lists:map(fun esrv_lib:path_to_file/1, Plts)},
                          {defines, esrv_lib:defines()}],
                     try
@@ -56,9 +66,7 @@ run(Uri, ProjPath, proj, Options) ->
             end;
         _ ->
             []
-    end;
-run(_, _, _, _) ->
-    [].
+    end.
 
 -spec get_plts(Options :: map()) -> {ok, [path()]} | not_ready | {error, binary()}.
 get_plts(#{<<"plts">> := Plts}) ->
@@ -99,7 +107,7 @@ process_behavior_modules([], _, Acc) ->
 process_behavior_modules([Module | T], DepsChain, Acc0) ->
     Acc1 =
         case esrv_db:read_module_meta_by_name(Module) of
-            [#module_meta{uri = Uri, module_type = ModuleType} | _] when ModuleType =/= otp ->
+            [#module_meta{uri = Uri, app_type = AppType} | _] when AppType =/= otp ->
                 get_target_uris(Uri, DepsChain, true, Acc0);
             _ ->
                 Acc0

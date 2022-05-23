@@ -1,32 +1,34 @@
--module(esrv_diagnostic_worker).
+-module(esrv_otp_node_mgr).
 
 -behaviour(gen_server).
 
--include("types.hrl").
--include("records.hrl").
 -include("log.hrl").
 
 %% API
--export([start_link/2,
-         run/3]).
+-export([start_link/0,
+         register_node/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          handle_continue/2, terminate/2, code_change/3, format_status/2]).
 
--record(state, {module :: module(),
-                options :: map()}).
+-define(STOP_TIMEOUT, 60000).
+-define(SERVER, ?MODULE).
+
+-record(state, {is_singleton :: boolean(),
+                registered_nodes :: [node()],
+                terminate_tref :: timer:tref() | undefined}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec start_link(Module :: module(), Options :: map()) -> {ok, pid()}.
-start_link(Module, Options) ->
-    gen_server:start_link(?MODULE, [Module, Options], []).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec run(ServerPid :: pid(), Uri :: uri(), AppId :: app_id() | undefined) -> ok.
-run(ServerPid, Uri, AppId) ->
-    gen_server:cast(ServerPid, {run, Uri, AppId}).
+-spec register_node(Node :: node()) -> ok.
+register_node(Node) ->
+    gen_server:call(?SERVER, {register_node, Node}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -44,9 +46,12 @@ run(ServerPid, Uri, AppId) ->
           {ok, State :: term(), {continue, Continue :: term()}} |
           {stop, Reason :: term()} |
           ignore.
-init([Module, Options]) ->
-    State = #state{module = Module, options = Options},
-    {ok, State}.
+init([]) ->
+    IsSingleton = esrv_config:get_value(singleton_otp_node, false),
+    State0 = #state{is_singleton = IsSingleton,
+                    registered_nodes = []},
+    State1 = check_stop_timer(State0),
+    {ok, State1}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -63,6 +68,12 @@ init([Module, Options]) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
+handle_call({register_node, Node}, _From, State0) ->
+    State1 = add_node(Node, State0),
+    State2 = cancel_stop_timer(State1),
+    ?LOG_INFO("Node '~s' registered", [Node]),
+    {reply, ok, State2};
+
 handle_call(Call, _From, State) ->
     ?LOG_ERROR("Module: ~p; not implemented call: ~p", [?MODULE, Call]),
     {stop, not_implemented, State}.
@@ -78,18 +89,8 @@ handle_call(Call, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_cast({run, Uri, AppId}, #state{module = Module, options = Options} = State) ->
-    Diagnostics =
-        try
-            Module:run(Uri, AppId, Options)
-        catch
-            T:E:S ->
-                ?LOG_WARNING("Diagnostic '~s' by '~s' exception; "
-                             "type: ~p; error: ~p; stacktrace: ~p",
-                             [filename:basename(Uri), Module, T, E, S]),
-                []
-        end,
-    ok = esrv_diagnostics_srv:result(self(), Uri, Diagnostics),
+handle_cast(stop, State) ->
+    ?LOG_INFO("No registered nodes, terminating..."),
     {stop, normal, State};
 
 handle_cast(Cast, State) ->
@@ -107,6 +108,12 @@ handle_cast(Cast, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: normal | term(), NewState :: term()}.
+handle_info({nodedown, Node}, State0) ->
+    ?LOG_INFO("Node '~s' unregistered", [Node]),
+    State1 = delete_node(Node, State0),
+    State2 = check_stop_timer(State1),
+    {noreply, State2};
+
 handle_info(Info, State) ->
     ?LOG_ERROR("Module: ~p; not implemented info: ~p", [?MODULE, Info]),
     {stop, not_implemented, State}.
@@ -170,3 +177,29 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+-spec add_node(Node :: node(), State :: #state{}) -> #state{}.
+add_node(Node, #state{registered_nodes = RegisteredNodes0} = State0) ->
+    monitor_node(Node, true),
+    State0#state{registered_nodes = [Node | RegisteredNodes0]}.
+
+-spec delete_node(Node :: node(), State :: #state{}) -> #state{}.
+delete_node(Node, #state{registered_nodes = RegisteredNodes0} = State0) ->
+    State0#state{registered_nodes = lists:delete(Node, RegisteredNodes0)}.
+
+-spec check_stop_timer(State :: #state{}) -> #state{}.
+check_stop_timer(#state{is_singleton = false,
+                        registered_nodes = [],
+                        terminate_tref = undefined} = State0) ->
+    ?LOG_INFO("Start terminate timer"),
+    {ok, TRef} = timer:apply_after(?STOP_TIMEOUT, gen_server, cast, [?SERVER, stop]),
+    State0#state{terminate_tref = TRef};
+check_stop_timer(State) ->
+    State.
+
+-spec cancel_stop_timer(State :: #state{}) -> #state{}.
+cancel_stop_timer(#state{terminate_tref = TRef} = State0) when TRef =/= undefined ->
+    ?LOG_INFO("Stop terminate timer"),
+    timer:cancel(TRef),
+    State0#state{terminate_tref = undefined};
+cancel_stop_timer(State) ->
+    State.

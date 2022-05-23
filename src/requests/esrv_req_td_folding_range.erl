@@ -8,7 +8,7 @@
 -include("types.hrl").
 -include("records.hrl").
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"textDocument">> := #{<<"uri">> := Uri}}}) ->
     Result =
         case esrv_index_mgr:get_current_module_data(Uri) of

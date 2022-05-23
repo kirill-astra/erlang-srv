@@ -83,10 +83,10 @@ parse_attribute(#form{data = {abstract_form, AbstractForm}},
         {module, ModuleName} ->
             Location = esrv_parser_lib:get_node_location(AbstractForm),
             ModuleInfo0#module_info{module_name = {ModuleName, Location}};
-        {Tag, {Tag, Behaviour}}
+        {Tag, {Tag, Behavior}}
           when Tag =:= behavior orelse Tag =:= behaviour ->
             Location = esrv_parser_lib:get_node_location(AbstractForm),
-            ModuleInfo0#module_info{behaviors = Behaviors0#{Behaviour => Location}};
+            ModuleInfo0#module_info{behaviors = Behaviors0#{Behavior => Location}};
         {compile, {compile, Options}} when is_list(Options) ->
             parse_compile_options(Options, ModuleInfo0);
         {compile, {compile, Option}} ->

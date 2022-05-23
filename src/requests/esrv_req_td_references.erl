@@ -12,43 +12,44 @@
 
 -type item() :: [{uri(), location(), location()}].
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                                                          <<"character">> := Character},
                                      <<"textDocument">> := #{<<"uri">> := Uri}}}) ->
     {ok, ModuleData} = esrv_index_mgr:get_current_module_data(Uri),
+    OnlyProjModules = check_only_proj_modules(Uri),
     Items =
         case esrv_req_lib:get_poi({Line + 1, Character + 1}, Uri, ModuleData) of
             {ok, #poi{data = {macro, _}} = Poi} ->
-                process_macro(Uri, ModuleData, Poi);
+                process_macro(OnlyProjModules, Uri, ModuleData, Poi);
             {ok, #poi{data = {include, _} = PoiData}} ->
-                process_plain(PoiData);
+                process_plain(OnlyProjModules, PoiData);
             {ok, #poi{data = {include_lib, _} = PoiData}} ->
-                process_plain(PoiData);
+                process_plain(OnlyProjModules, PoiData);
             {ok, #poi{data = {module, _} = PoiData}} ->
-                process_plain(PoiData);
+                process_plain(OnlyProjModules, PoiData);
             {ok, #poi{data = {behavior, _} = PoiData}} ->
-                process_plain(PoiData);
+                process_plain(OnlyProjModules, PoiData);
             {ok, #poi{data = {callback, NameArity}}} ->
-                process_callback(NameArity, ModuleData);
+                process_callback(OnlyProjModules, NameArity, ModuleData);
             {ok, #poi{data = {record, RecordName}}} ->
-                process_record(Uri, ModuleData, RecordName);
+                process_record(OnlyProjModules, Uri, ModuleData, RecordName);
             {ok, #poi{data = {field, RecordName, FieldName}}} ->
-                process_field(Uri, ModuleData, RecordName, FieldName);
+                process_field(OnlyProjModules, Uri, ModuleData, RecordName, FieldName);
             {ok, #poi{data = {local_type, NameArity}}} ->
-                process_local_type(Uri, ModuleData, NameArity);
+                process_local_type(OnlyProjModules, Uri, ModuleData, NameArity);
             {ok, #poi{data = {remote_type, ModuleName, NameArity}}} ->
-                process_remote_type(ModuleName, NameArity);
+                process_remote_type(OnlyProjModules, ModuleName, NameArity);
             {ok, #poi{data = {local_spec, NameArity}}} ->
-                process_local_function(Uri, ModuleData, NameArity);
+                process_local_function(OnlyProjModules, Uri, ModuleData, NameArity);
             {ok, #poi{data = {remote_spec, ModuleName, NameArity}}} ->
-                process_remote_function(ModuleName, NameArity);
+                process_remote_function(OnlyProjModules, ModuleName, NameArity);
             {ok, #poi{data = {local_function, NameArity}}} ->
-                process_local_function(Uri, ModuleData, NameArity);
+                process_local_function(OnlyProjModules, Uri, ModuleData, NameArity);
             {ok, #poi{data = {function_clause, NameArity}}} ->
-                process_local_function(Uri, ModuleData, NameArity);
+                process_local_function(OnlyProjModules, Uri, ModuleData, NameArity);
             {ok, #poi{data = {remote_function, ModuleName, NameArity}}} ->
-                process_remote_function(ModuleName, NameArity);
+                process_remote_function(OnlyProjModules, ModuleName, NameArity);
             _ ->
                 []
         end,
@@ -58,25 +59,41 @@ process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                   end, lists:usort(Items)),
     {response, #response{id = Id, result = Result}}.
 
--spec process_macro(Uri :: uri(), ModuleData :: module_data(), Poi :: poi()) -> [item()].
-process_macro(_, _, #poi{data = PoiData, definition = {remote, Uri, _}}) ->
-    process_definition(PoiData, Uri);
-process_macro(Uri, _, #poi{data = PoiData, definition = {local, _}}) ->
-    process_definition(PoiData, Uri);
-process_macro(Uri, ModuleData, #poi{data = PoiData, definition = undefined}) ->
+
+-spec check_only_proj_modules(Uri :: uri()) -> boolean().
+check_only_proj_modules(Uri) ->
+    case esrv_db:read_module_meta(Uri) of
+        [#module_meta{app_type = proj}] ->
+            true;
+        _ ->
+            false
+    end.
+
+-spec process_macro(OnlyProjModules :: boolean(),
+                    Uri :: uri(),
+                    ModuleData :: module_data(),
+                    Poi :: poi()) -> [item()].
+process_macro(OnlyProjModules, _, _, #poi{data = PoiData, definition = {remote, Uri, _}}) ->
+    process_definition(OnlyProjModules, PoiData, Uri);
+process_macro(OnlyProjModules, Uri, _, #poi{data = PoiData, definition = {local, _}}) ->
+    process_definition(OnlyProjModules, PoiData, Uri);
+process_macro(_, Uri, ModuleData, #poi{data = PoiData, definition = undefined}) ->
     collect_pois(Uri, ModuleData, [PoiData], []).
 
--spec process_callback(NameArity :: name_arity(), ModuleData :: module_data()) -> [item()].
-process_callback(NameArity, #module_data{module_name = {ModuleName, _}}) ->
-    traverse_proj_modules(fun({Uri, #module_data{behaviors = Behaviors} = ModuleData}, Acc) ->
-                                  case maps:find(ModuleName, Behaviors) of
-                                      {ok, _} ->
-                                          add_callback_definition(Uri, ModuleData, NameArity, Acc);
-                                      error ->
-                                          Acc
-                                  end
-                          end, []);
-process_callback(_, _) ->
+-spec process_callback(OnlyProjModules :: boolean(),
+                       NameArity :: name_arity(),
+                       ModuleData :: module_data()) -> [item()].
+process_callback(OnlyProjModules, NameArity, #module_data{module_name = {ModuleName, _}}) ->
+    Processor = fun({Uri, #module_data{behaviors = Behaviors} = ModuleData}, Acc) ->
+                        case maps:find(ModuleName, Behaviors) of
+                            {ok, _} ->
+                                add_callback_definition(Uri, ModuleData, NameArity, Acc);
+                            error ->
+                                Acc
+                        end
+                end,
+    esrv_req_lib:traverse_modules(OnlyProjModules, Processor, []);
+process_callback(_, _, _) ->
     [].
 
 -spec add_callback_definition(Uri :: uri(),
@@ -111,31 +128,36 @@ add_callback_definition2(Uri, NameArity, Acc0) ->
             Acc0
     end.
 
--spec process_record(Uri :: uri(), ModuleData :: module_data(), RecordName :: name()) -> [item()].
-process_record(Uri, ModuleData, RecordName) ->
+-spec process_record(OnlyProjModules :: boolean(),
+                     Uri :: uri(),
+                     ModuleData :: module_data(),
+                     RecordName :: name()) -> [item()].
+process_record(OnlyProjModules, Uri, ModuleData, RecordName) ->
     case esrv_req_lib:get_record_data(Uri, ModuleData, RecordName) of
         {ok, {DefinitionUri, _}} ->
-            process_definition({record, RecordName}, DefinitionUri);
+            process_definition(OnlyProjModules, {record, RecordName}, DefinitionUri);
         undefined ->
             []
     end.
 
--spec process_field(Uri :: uri(),
+-spec process_field(OnlyProjModules :: boolean(),
+                    Uri :: uri(),
                     ModuleData :: module_data(),
                     RecordName :: name(),
                     FieldName :: name()) -> [item()].
-process_field(Uri, ModuleData, RecordName, FieldName) ->
+process_field(OnlyProjModules, Uri, ModuleData, RecordName, FieldName) ->
     case esrv_req_lib:get_record_data(Uri, ModuleData, RecordName) of
         {ok, {DefinitionUri, _}} ->
-            process_definition({field, RecordName, FieldName}, DefinitionUri);
+            process_definition(OnlyProjModules, {field, RecordName, FieldName}, DefinitionUri);
         undefined ->
             []
     end.
 
--spec process_local_type(Uri :: uri(),
+-spec process_local_type(OnlyProjModules :: boolean(),
+                         Uri :: uri(),
                          ModuleData :: module_data(),
                          NameArity :: name_arity()) -> [item()].
-process_local_type(Uri, ModuleData, NameArity) ->
+process_local_type(OnlyProjModules, Uri, ModuleData, NameArity) ->
     IsBit =
         case ModuleData of
             #module_data{types = Types} when is_map_key(NameArity, Types) ->
@@ -146,41 +168,50 @@ process_local_type(Uri, ModuleData, NameArity) ->
         end,
     case IsBit of
         true ->
-            process_bit_calls(NameArity);
+            process_bit_calls(OnlyProjModules, NameArity);
         false ->
             case esrv_req_lib:get_local_type(Uri, ModuleData, NameArity) of
                 {ok, {DefinitionUri, _}} ->
-                    add_type_items(DefinitionUri, NameArity, sets:new());
+                    add_type_items(OnlyProjModules, DefinitionUri, NameArity, sets:new());
                 undefined ->
                     collect_type_pois(Uri, ModuleData, [{local_type, NameArity}], [])
             end
     end.
 
--spec process_remote_type(ModuleName :: module(), NameArity :: name_arity()) -> [item()].
-process_remote_type(ModuleName, NameArity) ->
+-spec process_remote_type(OnlyProjModules :: boolean(),
+                          ModuleName :: module(),
+                          NameArity :: name_arity()) -> [item()].
+process_remote_type(OnlyProjModules, ModuleName, NameArity) ->
     case esrv_req_lib:get_remote_type(ModuleName, NameArity) of
         {ok, {DefinitionUri, _}} ->
-            add_type_items(DefinitionUri, NameArity, sets:from_list([ModuleName]));
+            ModulesSet = sets:from_list([ModuleName]),
+            add_type_items(OnlyProjModules, DefinitionUri, NameArity, ModulesSet);
         undefined ->
-            traverse_proj_modules(fun({U, MD}, Acc) ->
-                                          ToCollect = [{remote_type, ModuleName, NameArity}],
-                                          collect_type_pois(U, MD, ToCollect, Acc)
-                                  end, [])
+            esrv_req_lib:traverse_modules(OnlyProjModules,
+                                          fun({U, MD}, Acc) ->
+                                                  ToCollect = [{remote_type,
+                                                                ModuleName,
+                                                                NameArity}],
+                                                  collect_type_pois(U, MD, ToCollect, Acc)
+                                          end,
+                                          [])
     end.
 
--spec process_bit_calls(NameArity :: name_arity()) -> [item()].
-process_bit_calls(NameArity) ->
-    traverse_proj_modules(fun({U, MD}, Acc) ->
-                                  ToCollect = [{local_type, NameArity}],
-                                  collect_type_pois(U, MD, ToCollect, Acc)
-                          end, []).
+-spec process_bit_calls(OnlyProjModules :: boolean(), NameArity :: name_arity()) -> [item()].
+process_bit_calls(OnlyProjModules, NameArity) ->
+    Processor = fun({U, MD}, Acc) ->
+                        ToCollect = [{local_type, NameArity}],
+                        collect_type_pois(U, MD, ToCollect, Acc)
+                end,
+    esrv_req_lib:traverse_modules(OnlyProjModules, Processor, []).
 
--spec add_type_items(DefinitionUri :: uri(),
+-spec add_type_items(OnlyProjModules :: boolean(),
+                     DefinitionUri :: uri(),
                      NameArity :: name_arity(),
                      ModulesSet :: sets:set(module())) -> [item()].
-add_type_items(DefinitionUri, NameArity, ModulesSet0) ->
+add_type_items(OnlyProjModules, DefinitionUri, NameArity, ModulesSet0) ->
     Processor =
-        fun(U, MD, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
+        fun({U, MD}, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
                 Items01 = collect_type_pois(U, MD, [{local_type, NameArity}], Items00),
                 {ExportedToSkip01, ExportedType} =
                     esrv_req_lib:get_exported_type(U, MD, NameArity, ExportedToSkip00),
@@ -202,16 +233,21 @@ add_type_items(DefinitionUri, NameArity, ModulesSet0) ->
                 end
         end,
     {Items1, ModulesSet1, _, _} =
-        process_included(DefinitionUri, Processor, {[], ModulesSet0, [], []}),
+        esrv_req_lib:traverse_by_definition(OnlyProjModules,
+                                            Processor,
+                                            DefinitionUri,
+                                            {[], ModulesSet0, [], []}),
     case sets:is_empty(ModulesSet1) of
         false ->
             ToCollect =
                 sets:fold(fun(ModuleName, Acc) ->
                                   [{remote_type, ModuleName, NameArity} | Acc]
                           end, [], ModulesSet1),
-            traverse_proj_modules(fun({U, MD}, Items10) ->
-                                          collect_type_pois(U, MD, ToCollect, Items10)
-                                  end, Items1);
+            esrv_req_lib:traverse_modules(OnlyProjModules,
+                                          fun({U, MD}, Items10) ->
+                                                  collect_type_pois(U, MD, ToCollect, Items10)
+                                          end,
+                                          Items1);
         true ->
             Items1
     end.
@@ -233,10 +269,11 @@ collect_type_pois(Uri, ModuleData, ToCollect, Acc) ->
                          end
                  end, collect_pois(Uri, ModuleData, ToCollect, [])) ++ Acc.
 
--spec process_local_function(Uri :: uri(),
+-spec process_local_function(OnlyProjModules :: boolean(),
+                             Uri :: uri(),
                              ModuleData :: module_data(),
                              NameArity :: name_arity()) -> [item()].
-process_local_function(Uri, ModuleData, NameArity) ->
+process_local_function(OnlyProjModules, Uri, ModuleData, NameArity) ->
     IsBif =
         case ModuleData of
             #module_data{functions = Functions} when is_map_key(NameArity, Functions) ->
@@ -247,41 +284,51 @@ process_local_function(Uri, ModuleData, NameArity) ->
         end,
     case IsBif of
         true ->
-            process_bif_calls(NameArity);
+            process_bif_calls(OnlyProjModules, NameArity);
         false ->
             case esrv_req_lib:get_local_function(Uri, ModuleData, NameArity) of
                 {ok, {DefinitionUri, _}} ->
-                    add_function_items(DefinitionUri, NameArity, sets:new());
+                    add_function_items(OnlyProjModules, DefinitionUri, NameArity, sets:new());
                 undefined ->
                     collect_function_pois(Uri, ModuleData, [{local_function, NameArity}], [])
             end
     end.
 
--spec process_remote_function(ModuleName :: module(), NameArity :: name_arity()) -> [item()].
-process_remote_function(ModuleName, NameArity) ->
+-spec process_remote_function(OnlyProjModules :: boolean(),
+                              ModuleName :: module(),
+                              NameArity :: name_arity()) -> [item()].
+process_remote_function(OnlyProjModules, ModuleName, NameArity) ->
     case esrv_req_lib:get_remote_function(ModuleName, NameArity) of
         {ok, {DefinitionUri, _}} ->
-            add_function_items(DefinitionUri, NameArity, sets:from_list([ModuleName]));
+            ModulesSet = sets:from_list([ModuleName]),
+            add_function_items(OnlyProjModules, DefinitionUri, NameArity, ModulesSet);
         undefined ->
-            traverse_proj_modules(fun({U, MD}, Acc) ->
-                                          ToCollect = [{remote_function, ModuleName, NameArity}],
-                                          collect_function_pois(U, MD, ToCollect, Acc)
-                                  end, [])
+            esrv_req_lib:traverse_modules(OnlyProjModules,
+                                          fun({U, MD}, Acc) ->
+                                                  ToCollect = [{remote_function,
+                                                                ModuleName,
+                                                                NameArity}],
+                                                  collect_function_pois(U, MD, ToCollect, Acc)
+                                          end,
+                                          [])
     end.
 
--spec process_bif_calls(NameArity :: name_arity()) -> [item()].
-process_bif_calls(NameArity) ->
-    traverse_proj_modules(fun({U, MD}, Acc) ->
-                                  ToCollect = [{remote_function, erlang, NameArity}],
-                                  collect_function_pois(U, MD, ToCollect, Acc)
-                          end, []).
+-spec process_bif_calls(OnlyProjModules :: boolean(), NameArity :: name_arity()) -> [item()].
+process_bif_calls(OnlyProjModules, NameArity) ->
+    esrv_req_lib:traverse_modules(OnlyProjModules,
+                                  fun({U, MD}, Acc) ->
+                                          ToCollect = [{remote_function, erlang, NameArity}],
+                                          collect_function_pois(U, MD, ToCollect, Acc)
+                                  end,
+                                  []).
 
--spec add_function_items(DefinitionUri :: uri(),
+-spec add_function_items(OnlyProjModules :: boolean(),
+                         DefinitionUri :: uri(),
                          NameArity :: name_arity(),
                          ModulesSet :: sets:set(module())) -> [item()].
-add_function_items(DefinitionUri, NameArity, ModulesSet0) ->
+add_function_items(OnlyProjModules, DefinitionUri, NameArity, ModulesSet0) ->
     Processor =
-        fun(U, MD, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
+        fun({U, MD}, {Items00, ModulesSet00, ExportedToSkip00, ModuleToSkip00}) ->
                 Items01 = collect_function_pois(U, MD, [{local_function, NameArity}], Items00),
                 {ExportedToSkip01, Exported} =
                     esrv_req_lib:get_exported(U, MD, NameArity, ExportedToSkip00),
@@ -303,16 +350,21 @@ add_function_items(DefinitionUri, NameArity, ModulesSet0) ->
                 end
         end,
     {Items1, ModulesSet1, _, _} =
-        process_included(DefinitionUri, Processor, {[], ModulesSet0, [], []}),
+        esrv_req_lib:traverse_by_definition(OnlyProjModules,
+                                            Processor,
+                                            DefinitionUri,
+                                            {[], ModulesSet0, [], []}),
     case sets:is_empty(ModulesSet1) of
         false ->
             ToCollect =
                 sets:fold(fun(ModuleName, Acc) ->
                                   [{remote_function, ModuleName, NameArity} | Acc]
                           end, [], ModulesSet1),
-            traverse_proj_modules(fun({U, MD}, Items10) ->
-                                          collect_function_pois(U, MD, ToCollect, Items10)
-                                  end, Items1);
+            esrv_req_lib:traverse_modules(OnlyProjModules,
+                                          fun({U, MD}, Items10) ->
+                                                  collect_function_pois(U, MD, ToCollect, Items10)
+                                          end,
+                                          Items1);
         true ->
             Items1
     end.
@@ -334,14 +386,17 @@ collect_function_pois(Uri, ModuleData, ToCollect, Acc) ->
                          end
                  end, collect_pois(Uri, ModuleData, ToCollect, [])) ++ Acc.
 
--spec process_plain(PoiData :: poi_data()) -> [item()].
-process_plain(PoiData) ->
-    traverse_proj_modules(fun({U, MD}, Acc) -> collect_pois(U, MD, [PoiData], Acc) end, []).
+-spec process_plain(OnlyProjModules :: boolean(), PoiData :: poi_data()) -> [item()].
+process_plain(OnlyProjModules, PoiData) ->
+    Processor = fun({U, MD}, Acc) -> collect_pois(U, MD, [PoiData], Acc) end,
+    esrv_req_lib:traverse_modules(OnlyProjModules, Processor, []).
 
--spec process_definition(PoiData :: poi_data(), DefinitionUri :: uri()) -> [item()].
-process_definition(PoiData, DefinitionUri) ->
-    Processor = fun(U, MD, A) -> collect_pois(U, MD, [PoiData], A) end,
-    process_included(DefinitionUri, Processor, []).
+-spec process_definition(OnlyProjModules :: boolean(),
+                         PoiData :: poi_data(),
+                         DefinitionUri :: uri()) -> [item()].
+process_definition(OnlyProjModules, PoiData, DefinitionUri) ->
+    Processor = fun({U, MD}, A) -> collect_pois(U, MD, [PoiData], A) end,
+    esrv_req_lib:traverse_by_definition(OnlyProjModules, Processor, DefinitionUri, []).
 
 -spec collect_pois(Uri :: uri(),
                    ModuleData :: module_data(),
@@ -358,62 +413,3 @@ collect_pois(Uri, ModuleData, ToCollect, Acc0) ->
                                 Acc00
                         end
                 end, Acc0, esrv_req_lib:collect_pois(Uri, ModuleData)).
-
--spec process_included(DefinitionUri :: uri(),
-                       Processor :: fun((uri(), module_data(), any()) -> any()),
-                       Acc :: any()) -> any().
-process_included(DefinitionUri, Processor, Acc0) ->
-    {Acc1, _} =
-        traverse_proj_modules(fun({U, MD}, {Acc00, IncludedAcc00}) ->
-                                      {DefinitionIncluded, IncludedAcc01} =
-                                          check_included(DefinitionUri, U, MD, IncludedAcc00),
-                                      {case DefinitionIncluded of
-                                           true ->
-                                               Processor(U, MD, Acc00);
-                                           false ->
-                                               Acc00
-                                       end, IncludedAcc01}
-                              end, {Acc0, #{}}),
-    Acc1.
-
--spec check_included(DefinitionUri :: uri(),
-                     Uri :: uri(),
-                     ModuleData :: module_data(),
-                     IncludedAcc :: #{uri() => boolean()}) -> {boolean(), #{uri() => boolean()}}.
-check_included(Uri, Uri, _, IncludedAcc) ->
-    {true, IncludedAcc};
-check_included(DefinitionUri, _, ModuleData, IncludedAcc0) ->
-    #module_data{include_data = #include_data{resolved = Resolved}} = ModuleData,
-    lists:foldl(fun(_, {true, IncludedAcc00}) ->
-                        {true, IncludedAcc00};
-                   (IncludedUri, {false, IncludedAcc00}) ->
-                        case maps:find(IncludedUri, IncludedAcc00) of
-                            {ok, DefinitionIncluded} ->
-                                {DefinitionIncluded, IncludedAcc00};
-                            error ->
-                                case esrv_lib:get_module_data(IncludedUri) of
-                                    {ok, IncludedModuleData} ->
-                                        {DefinitionIncluded, IncludedAcc01} =
-                                            check_included(DefinitionUri,
-                                                           IncludedUri,
-                                                           IncludedModuleData,
-                                                           IncludedAcc00),
-                                        {DefinitionIncluded,
-                                         IncludedAcc01#{IncludedUri => DefinitionIncluded}};
-                                    undefined ->
-                                        {false, IncludedAcc00}
-                                end
-                        end
-                end, {false, IncludedAcc0}, maps:keys(Resolved)).
-
--spec traverse_proj_modules(Fun :: fun(({uri(), module_data()}, any()) -> any()), Acc :: any()) ->
-          any().
-traverse_proj_modules(Fun, Acc0) ->
-    lists:foldl(fun({Uri, PersistentModuleData}, Acc00) ->
-                        case esrv_index_mgr:get_current_module_data(Uri) of
-                            {ok, VolatileModuleData} ->
-                                Fun({Uri, VolatileModuleData}, Acc00);
-                            undefined ->
-                                Fun({Uri, PersistentModuleData}, Acc00)
-                        end
-                end, Acc0, esrv_db:get_all_proj_module_data()).

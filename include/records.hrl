@@ -27,6 +27,11 @@
 -type message() :: request() | response() | notification().
 
 %% mnesia
+-record(scanned_app, {id :: app_id(),
+                      type :: app_type(),
+                      path :: path()}).
+-type scanned_app() :: #scanned_app{}.
+
 -record(parsed_module, {uri :: uri(),
                         hash :: hash(),
                         parser_version :: integer(),
@@ -34,19 +39,20 @@
 -type parsed_module() :: #parsed_module{}.
 
 -record(module_meta, {uri :: uri(),
+                      app_id :: app_id() | undefined,
+                      app_type :: app_type() | undefined,
                       hash :: hash(),
-                      module :: module() | undefined,
-                      module_type :: module_type()}).
+                      module :: module() | undefined}).
 -type module_meta() :: #module_meta{}.
 
--record(proj_module, {uri :: uri(),
-                      module :: module() | undefined,
-                      module_data :: module_data()}).
--type proj_module() :: #proj_module{}.
+-record(active_module, {uri :: uri(),
+                        app_type :: active_app_type(),
+                        module :: module() | undefined,
+                        module_data :: module_data()}).
+-type active_module() :: #active_module{}.
 
 -record(text_document, {uri :: uri(),
-                        app_path :: path(),
-                        module_type :: module_type(),
+                        app_id :: app_id() | undefined,
                         saved_text_hash :: hash(),
                         current_version :: non_neg_integer(),
                         current_content :: binary(),

@@ -1,32 +1,32 @@
--module(esrv_diagnostic_worker).
+-module(esrv_otp_node_request_srv).
 
 -behaviour(gen_server).
 
--include("types.hrl").
 -include("records.hrl").
 -include("log.hrl").
 
 %% API
--export([start_link/2,
-         run/3]).
+-export([start_link/0,
+         ensure_indexed/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          handle_continue/2, terminate/2, code_change/3, format_status/2]).
 
--record(state, {module :: module(),
-                options :: map()}).
+-define(SERVER, ?MODULE).
+
+-record(state, {app_ids :: [app_id()]}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec start_link(Module :: module(), Options :: map()) -> {ok, pid()}.
-start_link(Module, Options) ->
-    gen_server:start_link(?MODULE, [Module, Options], []).
+-spec start_link() -> {ok, pid()}.
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec run(ServerPid :: pid(), Uri :: uri(), AppId :: app_id() | undefined) -> ok.
-run(ServerPid, Uri, AppId) ->
-    gen_server:cast(ServerPid, {run, Uri, AppId}).
+-spec ensure_indexed(ScannedApps :: [scanned_app()]) -> ok.
+ensure_indexed(ScannedApps) ->
+    gen_server:call(?SERVER, {ensure_indexed, ScannedApps}, infinity).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -44,8 +44,8 @@ run(ServerPid, Uri, AppId) ->
           {ok, State :: term(), {continue, Continue :: term()}} |
           {stop, Reason :: term()} |
           ignore.
-init([Module, Options]) ->
-    State = #state{module = Module, options = Options},
+init([]) ->
+    State = #state{app_ids = []},
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -63,6 +63,23 @@ init([Module, Options]) ->
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
           {stop, Reason :: term(), NewState :: term()}.
+handle_call({ensure_indexed, ScannedApps0}, _From, #state{app_ids = AppIds0} = State0) ->
+    ScannedApps1 = lists:filter(fun(#scanned_app{id = Id}) ->
+                                        not lists:member(Id, AppIds0)
+                                end, ScannedApps0),
+    case ScannedApps1 of
+        [_|_] ->
+            ok = lists:foreach(fun mnesia:dirty_write/1, ScannedApps1),
+            ok = esrv_index_mgr:process_applications(ScannedApps1, []),
+            AppIds1 =
+                lists:foldl(fun(#scanned_app{id = Id}, AppIds00) ->
+                                    [Id | AppIds00]
+                            end, AppIds0, ScannedApps1),
+            {reply, ok, State0#state{app_ids = AppIds1}};
+        [] ->
+            {reply, ok, State0}
+    end;
+
 handle_call(Call, _From, State) ->
     ?LOG_ERROR("Module: ~p; not implemented call: ~p", [?MODULE, Call]),
     {stop, not_implemented, State}.
@@ -78,20 +95,6 @@ handle_call(Call, _From, State) ->
           {noreply, NewState :: term(), Timeout :: timeout()} |
           {noreply, NewState :: term(), hibernate} |
           {stop, Reason :: term(), NewState :: term()}.
-handle_cast({run, Uri, AppId}, #state{module = Module, options = Options} = State) ->
-    Diagnostics =
-        try
-            Module:run(Uri, AppId, Options)
-        catch
-            T:E:S ->
-                ?LOG_WARNING("Diagnostic '~s' by '~s' exception; "
-                             "type: ~p; error: ~p; stacktrace: ~p",
-                             [filename:basename(Uri), Module, T, E, S]),
-                []
-        end,
-    ok = esrv_diagnostics_srv:result(self(), Uri, Diagnostics),
-    {stop, normal, State};
-
 handle_cast(Cast, State) ->
     ?LOG_ERROR("Module: ~p; not implemented cast: ~p", [?MODULE, Cast]),
     {stop, not_implemented, State}.

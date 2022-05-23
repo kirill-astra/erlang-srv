@@ -54,7 +54,10 @@
 
 -export([find_module_data/1,
          traverse_by_definition/3,
+         traverse_by_definition/4,
+         traverse_modules/3,
          traverse_proj_modules/2,
+         traverse_active_modules/2,
          get_poi/3,
          get_poi/4,
          collect_pois/2,
@@ -359,19 +362,33 @@ get_deeply(Uri, Finder, ModuleData) ->
                  Finder :: fun((uri() | undefined, module_data()) -> get_result()),
                  ModuleData :: module_data(),
                  ToSkip :: [uri()]) -> {[uri()], get_result()}.
-get_deeply(Uri, Finder, ModuleData, ToSkip0) ->
-    case lists:member(Uri, ToSkip0) of
-        false ->
-            get_deeply2(Uri, Finder, ModuleData, ToSkip0);
-        true ->
-            {ToSkip0, undefined}
-    end.
+get_deeply(Uri, Finder, ModuleData, ToSkip) ->
+    get_deeply2(Uri, Finder, ModuleData, ToSkip, []).
 
 -spec get_deeply2(Uri :: uri() | undefined,
                   Finder :: fun((uri() | undefined, module_data()) -> get_result()),
                   ModuleData :: module_data(),
-                  ToSkip :: [uri()]) -> {[uri()], get_result()}.
-get_deeply2(Uri, Finder, ModuleData, ToSkip0) ->
+                  ToSkip :: [uri()],
+                  Chain :: [uri()]) -> {[uri()], get_result()}.
+get_deeply2(Uri, Finder, ModuleData, ToSkip, Chain) ->
+    case lists:member(Uri, ToSkip) of
+        false ->
+            case lists:member(Uri, Chain) of
+                false ->
+                    get_deeply3(Uri, Finder, ModuleData, ToSkip, Chain);
+                true ->
+                    {ToSkip, undefined}
+            end;
+        true ->
+            {ToSkip, undefined}
+    end.
+
+-spec get_deeply3(Uri :: uri() | undefined,
+                  Finder :: fun((uri() | undefined, module_data()) -> get_result()),
+                  ModuleData :: module_data(),
+                  ToSkip :: [uri()],
+                  Chain :: [uri()]) -> {[uri()], get_result()}.
+get_deeply3(Uri, Finder, ModuleData, ToSkip0, Chain) ->
     case Finder(Uri, ModuleData) of
         {ok, Value} ->
             {ToSkip0, {ok, Value}};
@@ -383,10 +400,11 @@ get_deeply2(Uri, Finder, ModuleData, ToSkip0) ->
                                (IncludedUri, {ToSkip00, undefined}) ->
                                     case esrv_lib:get_module_data(IncludedUri) of
                                         {ok, IncludedModuleData} ->
-                                            get_deeply(IncludedUri,
-                                                       Finder,
-                                                       IncludedModuleData,
-                                                       ToSkip00);
+                                            get_deeply2(IncludedUri,
+                                                        Finder,
+                                                        IncludedModuleData,
+                                                        ToSkip00,
+                                                        [Uri | Chain]);
                                         undefined ->
                                             {ToSkip00, undefined}
                                     end
@@ -471,7 +489,7 @@ collect_local_function_name(Uri, ModuleData, FunctionName) ->
 -spec collect_remote_function_name(ModuleName :: module(), FunctionName :: name()) ->
           [{arity(), {uri(), function_data()}}].
 collect_remote_function_name(ModuleName, FunctionName) ->
-     case find_module_data(ModuleName) of
+    case find_module_data(ModuleName) of
         {ok, Uri, ModuleData} ->
             collect_remote_function_name(Uri, ModuleData, FunctionName);
         undefined ->
@@ -596,7 +614,7 @@ collect_local_type_name(Uri, ModuleData, TypeName) ->
 -spec collect_remote_type_name(ModuleName :: module(), TypeName :: name()) ->
           [{arity(), {uri(), location()}}].
 collect_remote_type_name(ModuleName, TypeName) ->
-     case find_module_data(ModuleName) of
+    case find_module_data(ModuleName) of
         {ok, Uri, ModuleData} ->
             collect_remote_type_name(Uri, ModuleData, TypeName);
         undefined ->
@@ -753,23 +771,38 @@ find_module_data(ModuleName) ->
             undefined
     end.
 
--type traverse_processor() :: fun((uri(), module_data(), any()) -> any()).
+-type traverse_processor() :: fun(({uri(), module_data()}, any()) -> any()).
+-type traverse_fetcher() :: fun(() -> [{uri(), module_data()}]).
 
 -spec traverse_by_definition(Processor :: traverse_processor(),
                              DefinitionUri :: uri(),
                              InitAcc :: any()) -> any().
-traverse_by_definition(Processor, DefinitionUri, Acc0) ->
+traverse_by_definition(Processor, DefinitionUri, Acc) ->
+    traverse_by_definition(false, Processor, DefinitionUri, Acc).
+
+-spec traverse_by_definition(OnlyProjModules :: boolean(),
+                             Processor :: traverse_processor(),
+                             DefinitionUri :: uri(),
+                             InitAcc :: any()) -> any().
+traverse_by_definition(OnlyProjModules, Processor, DefinitionUri, Acc0) ->
     {Acc1, _} =
-        traverse_proj_modules(fun(U, MD, {Acc00, IncludedAcc00}) ->
-                                      {DefinitionIncluded, IncludedAcc01} =
-                                          check_included(DefinitionUri, U, MD, IncludedAcc00),
-                                      {case DefinitionIncluded of
-                                           true ->
-                                               Processor(U, MD, Acc00);
-                                           false ->
-                                               Acc00
-                                       end, IncludedAcc01}
-                              end, {Acc0, #{}}),
+        do_traverse_modules(fun({U, MD}, {Acc00, IncludedAcc00}) ->
+                                    {DefinitionIncluded, IncludedAcc01} =
+                                        check_included(DefinitionUri, U, MD, IncludedAcc00),
+                                    {case DefinitionIncluded of
+                                         true ->
+                                             Processor({U, MD}, Acc00);
+                                         false ->
+                                             Acc00
+                                     end, IncludedAcc01}
+                            end,
+                            case OnlyProjModules of
+                                true ->
+                                    fun esrv_db:get_all_proj_module_data/0;
+                                false ->
+                                    fun esrv_db:get_all_active_module_data/0
+                            end,
+                            {Acc0, #{}}),
     Acc1.
 
 -spec check_included(DefinitionUri :: uri(),
@@ -802,16 +835,34 @@ check_included(DefinitionUri, _, ModuleData, IncludedAcc0) ->
                         end
                 end, {false, IncludedAcc0}, maps:keys(Resolved)).
 
+-spec traverse_modules(OnlyProjModules :: boolean(),
+                       Processor :: traverse_processor(),
+                       Acc :: any()) -> any().
+traverse_modules(true, Processor, Acc) ->
+    traverse_proj_modules(Processor, Acc);
+traverse_modules(false, Processor, Acc) ->
+    traverse_active_modules(Processor, Acc).
+
 -spec traverse_proj_modules(Processor :: traverse_processor(), Acc :: any()) -> any().
-traverse_proj_modules(Processor, Acc0) ->
+traverse_proj_modules(Processor, Acc) ->
+    do_traverse_modules(Processor, fun esrv_db:get_all_proj_module_data/0, Acc).
+
+-spec traverse_active_modules(Processor :: traverse_processor(), Acc :: any()) -> any().
+traverse_active_modules(Processor, Acc) ->
+    do_traverse_modules(Processor, fun esrv_db:get_all_active_module_data/0, Acc).
+
+-spec do_traverse_modules(Processor :: traverse_processor(),
+                          Fetcher :: traverse_fetcher(),
+                          Acc :: any()) -> any().
+do_traverse_modules(Processor, Fetcher, Acc0) ->
     lists:foldl(fun({Uri, PersistentModuleData}, Acc00) ->
                         case esrv_index_mgr:get_current_module_data(Uri) of
                             {ok, VolatileModuleData} ->
-                                Processor(Uri, VolatileModuleData, Acc00);
+                                Processor({Uri, VolatileModuleData}, Acc00);
                             undefined ->
-                                Processor(Uri, PersistentModuleData, Acc00)
+                                Processor({Uri, PersistentModuleData}, Acc00)
                         end
-                end, Acc0, esrv_db:get_all_proj_module_data()).
+                end, Acc0, Fetcher()).
 
 -spec get_poi(Location :: location(), Uri :: uri(), ModuleData :: module_data()) ->
           {ok, poi()} | undefined.
@@ -1107,8 +1158,9 @@ format_atom(Atom) ->
 
 -spec format_macro_name(Name :: name()) -> binary().
 format_macro_name(Name) ->
-    LowercasedName = binary_to_atom(string:lowercase(atom_to_binary(Name, utf8)), utf8),
-    case atom_to_binary(LowercasedName, utf8) =:= format_atom(LowercasedName) of
+    LowercasedName = string:lowercase(atom_to_binary(Name, utf8)),
+    NormalizedName = binary_to_atom(binary:replace(LowercasedName, <<"_">>, <<>>, [global]), utf8),
+    case atom_to_binary(NormalizedName, utf8) =:= format_atom(NormalizedName) of
         true ->
             atom_to_binary(Name, utf8);
         false ->

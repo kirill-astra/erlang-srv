@@ -1,26 +1,39 @@
-# List of OTP applications to to exclude from analysis
-otpAppsExclude:
+# List of directories containing sub projects
+subProjDirs:
+  - _checkouts
+
+# List of sub projects
+subProjs:
+  - _checkouts/sub_project_1
+  - _checkouts/sub_project_2
+
+# List of directories containing dependencies.
+depDirs:
+  - deps
+  - _build/default/lib
+
+# List of dependencies
+deps:
+  - deps/dep_1
+  - deps/dep_2
+
+# List of applications to exclude from analysis
+appsIgnore:
   - megaco
   - diameter
   - snmp
   - wx
+  - sub_project_to_ignore
+  - dep_to_ignore
 
 # Subdirectories to recursively analyze.
-# Used both for project and dependency applications.
-# It supports wildcards.
+# Used both for project and sub-project applications.
 appsDirs:
   - src
   - test
   - include
 
-# List of directories containing dependencies.
-# It supports wildcards.
-depsDirs:
-  - _checkout
-  - _build/default/lib
-
 # List of directories used by diagnostic modules as include dirs.
-# It supports wildcards.
 includeDirs:
   - include
 
@@ -44,6 +57,9 @@ macros:
 
 # Whether or not to fetch automatically OTP man pages
 syncOtpMan: true
+
+# Whether or not to start dedicated erlang node for OTP files handling
+dedicatedOtpNode: true
 
 # List of diagnostic modules with their options
 diagnostics:

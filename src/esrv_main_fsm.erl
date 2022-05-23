@@ -9,7 +9,6 @@
 
 %% API
 -export([start_link/0,
-         subscribe/0,
          initialized/1,
          message_in/1,
          next_id/0,
@@ -30,8 +29,7 @@
 -define(EXIT_TIMEOUT, 10000).
 -define(SERVER, ?MODULE).
 
--record(data, {subscribers :: [pid()],
-               in_requests :: #{msg_id() => pid()},
+-record(data, {in_requests :: #{msg_id() => pid()},
                out_requests :: #{msg_id() => from()},
                next_id :: msg_id()}).
 
@@ -41,10 +39,6 @@
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_statem:start_link({local, ?SERVER}, ?MODULE, [], []).
-
--spec subscribe() -> ok.
-subscribe() ->
-    gen_statem:cast(?SERVER, {subscribe, self()}).
 
 -spec initialized(Response :: response()) -> ok.
 initialized(Response) ->
@@ -97,8 +91,7 @@ callback_mode() -> state_functions.
 %%--------------------------------------------------------------------
 -spec init(Args :: term()) -> gen_statem:init_result(atom()).
 init([]) ->
-    {ok, waiting_for_initialize, #data{subscribers = [],
-                                       in_requests = #{},
+    {ok, waiting_for_initialize, #data{in_requests = #{},
                                        out_requests = #{},
                                        next_id = 1}}.
 
@@ -152,7 +145,7 @@ initializing(EventType, EventContent, Data) ->
           gen_statem:event_handler_result(atom()).
 waiting_for_initialized(internal, {in, #notification{method = <<"initialized">>}}, Data) ->
     ?LOG_INFO("Initialization completed"),
-    {next_state, active, Data, [{next_event, internal, {notify_subscribers, initialized}}]};
+    {next_state, active, Data};
 
 waiting_for_initialized(EventType, EventContent, Data) ->
     handle_event(EventType, EventContent, waiting_for_initialized, Data).
@@ -212,13 +205,6 @@ waiting_for_exit(EventType, EventContent, Data) ->
           gen_statem:state_enter_result(term());
                   (gen_statem:event_type(), Msg :: term(), State :: term(), Data :: term()) ->
           gen_statem:event_handler_result(term()).
-handle_event(cast, {subscribe, Subscriber}, _, #data{subscribers = Subscribers0} = Data0) ->
-    Data1 = Data0#data{subscribers = [Subscriber | Subscribers0]},
-    {keep_state, Data1};
-
-handle_event(internal, {notify_subscribers, Info}, _, #data{subscribers = Subscribers}) ->
-    lists:foreach(fun(Subscriber) -> Subscriber ! Info end, Subscribers),
-    keep_state_and_data;
 
 %% Receiveing incoming messages
 handle_event(cast, {in, #request{} = Request}, _, _) ->

@@ -30,7 +30,7 @@
 -define(SORT_KEYWORD, ?SORT_NORMAL).
 -define(SORT_ATOM, ?SORT_NORMAL).
 
--spec process(Request :: request()) -> {response, #response{}}.
+-spec process(Request :: request()) -> {response, response()}.
 process(#request{id = Id, params = #{<<"position">> := #{<<"line">> := Line,
                                                          <<"character">> := Character},
                                      <<"textDocument">> := #{<<"uri">> := Uri}}}) ->
@@ -49,7 +49,7 @@ do_process({_, CursorCharacter} = CursorLocation, Uri, ModuleData) ->
     [CursorLineData | T] = lists:reverse(LinesData),
     {ReversedTokens, LeftLineInfo, RightLineInfo} =
         parse_cursor_line(CursorLineData, CursorCharacter, ModuleData),
-    case check_record_field(ReversedTokens, T, LeftLineInfo, ZoneType, StartLocation) of
+    case check_record_field(ReversedTokens, T, LeftLineInfo, StartLocation) of
         {ok, RecordName, Filter} ->
             {record_fields_completion_items(RecordName, Filter, ModuleData),
              LeftLineInfo,
@@ -360,7 +360,7 @@ general_completion_items(Filter, ZoneType, Uri, ModuleData) ->
         ZoneType =:= spec_name ->
             local_function_completion_items(ModuleData, Filter, Uri, args);
         ZoneType =:= record_body ->
-             module_completion_items(Filter)
+            module_completion_items(Filter)
                 ++ local_function_completion_items(ModuleData, Filter, Uri, args)
                 ++ import_completion_items(ModuleData, undefined, Uri, args)
                 ++ bif_completion_items(Filter, args)
@@ -589,7 +589,7 @@ macros_completion_items(Filter, Uri, ModuleData) ->
                              <<"sortText">> => ?SORT_MACRO,
                              <<"data">> => [{<<"uri">>, Uri}]} | Acc];
                      ({Name, Arity}, #macro_definition{args = Args}, Acc) ->
-                          Signature = maps:keys(Args),
+                          Signature = [ N || {N, _} <- lists:keysort(2, maps:to_list(Args)) ],
                           [#{<<"label">> => esrv_req_lib:format_macro_name_arity(Name, Arity),
                              <<"kind">> => ?COMPLETION_ITEM_KIND_SNIPPET,
                              <<"sortText">> => iolist_to_binary(io_lib:format("~s_~s_~3.10.0b",
@@ -821,10 +821,10 @@ left_line_info(LeftLine) ->
     #{whitespace => case LeftLine of <<>> -> true; _ -> binary:last(LeftLine) =:= $\s end,
       last_word => case re:run(LeftLine, <<"(\\w*)$">>, [{capture, all_but_first, binary}]) of
                        {match, [LastWord]} when byte_size(LastWord) > 0 ->
-                           LastWord;
-                       _ ->
-                           undefined
-                   end}.
+                                                 LastWord;
+                                           _ ->
+                                                 undefined
+                                         end}.
 
 -spec right_line_info(RightLine :: binary()) -> line_info().
 right_line_info(RightLine) ->
@@ -840,13 +840,11 @@ right_line_info(RightLine) ->
 -spec check_record_field(ReversedTokens :: [erl_scan:token()] | ignore,
                          LinesDataLeft :: [binary()],
                          LeftLineInfo :: line_info(),
-                         ZoneType :: zone_type(),
                          StartLocation :: location()) ->
           {ok, name(), binary() | undefined} | undefined.
 check_record_field(ReversedTokens,
                    LinesDataLeft0,
                    #{whitespace := Whitespace},
-                   {function, _},
                    {_, StartColumn}) when ReversedTokens =/= ignore ->
     {PrevToken, ReversedTokensLeft, LinesDataLeft1} =
         get_prev_token(ReversedTokens, LinesDataLeft0, StartColumn),
@@ -868,7 +866,7 @@ check_record_field(ReversedTokens,
         _ ->
             undefined
     end;
-check_record_field(_, _, _, _, _) ->
+check_record_field(_, _, _, _) ->
     undefined.
 
 -spec find_record_field(Token :: erl_scan:token() | undefined,
@@ -1078,7 +1076,7 @@ apply_filter(Filter, Value) ->
 
 -spec get_all_module_name() -> [name()].
 get_all_module_name() ->
-    lists:usort(esrv_db:get_all_module_name()).
+    lists:usort(esrv_db:get_all_module_names()).
 
 -spec get_all_behaviors() -> [name()].
 get_all_behaviors() ->
